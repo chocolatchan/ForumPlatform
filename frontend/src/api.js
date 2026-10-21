@@ -170,11 +170,24 @@ export class ApiClient {
     });
   }
 
-  async getThreads(limit = 20, cursor = null) {
+  async getThreads(limit = 20, cursor = null, categoryId = null) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (cursor) q.set("cursor", cursor);
+    if (categoryId) q.set("category_id", categoryId);
     return this.request(`/threads?${q.toString()}`, {
       method: "GET",
+    });
+  }
+
+  async getThread(threadId) {
+    return this.request(`/threads/${threadId}`, {
+      method: "GET",
+    });
+  }
+
+  async recordThreadView(threadId) {
+    return this.request(`/threads/${threadId}/view`, {
+      method: "POST",
     });
   }
 
@@ -182,6 +195,119 @@ export class ApiClient {
     return this.request("/threads", {
       method: "POST",
       body: { title, body, category_id: categoryId },
+    });
+  }
+
+  async lockThread(threadId, locked = true, reason = "") {
+    return this.request(`/threads/${threadId}/lock`, {
+      method: "PUT",
+      body: { is_locked: locked },
+    });
+  }
+
+  async pinThread(threadId, pinned = true) {
+    return this.request(`/threads/${threadId}/pin`, {
+      method: "PUT",
+      body: { is_pinned: pinned },
+    });
+  }
+
+  async deleteThread(threadId) {
+    return this.request(`/threads/${threadId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async getComments(threadId, limit = 50, cursor = null) {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (cursor) q.set("cursor", cursor);
+    return this.request(`/threads/${threadId}/comments?${q.toString()}`, {
+      method: "GET",
+    });
+  }
+
+  async createComment(threadId, body, parentId = null) {
+    const payload = { body };
+    if (parentId) payload.parent_id = parentId;
+    return this.request(`/threads/${threadId}/comments`, {
+      method: "POST",
+      body: payload,
+    });
+  }
+
+  async deleteComment(commentId) {
+    return this.request(`/comments/${commentId}`, {
+      method: "DELETE",
+    });
+  }
+
+  // --- Interaction Endpoints ---
+
+  async voteThread(threadId, value) {
+    // value: 1 for upvote, -1 for downvote (toggling is handled by repeating same value)
+    return this.request(`/threads/${threadId}/vote`, {
+      method: "PUT",
+      body: { value },
+    });
+  }
+
+  async voteComment(commentId, value) {
+    return this.request(`/comments/${commentId}/vote`, {
+      method: "PUT",
+      body: { value },
+    });
+  }
+
+  async bookmarkThread(threadId) {
+    return this.request(`/threads/${threadId}/bookmark`, {
+      method: "PUT",
+    });
+  }
+
+  async unbookmarkThread(threadId) {
+    return this.request(`/threads/${threadId}/bookmark`, {
+      method: "DELETE",
+    });
+  }
+
+  async getBookmarks(limit = 20, cursor = null) {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (cursor) q.set("cursor", cursor);
+    return this.request(`/profile/bookmarks?${q.toString()}`, {
+      method: "GET",
+    });
+  }
+
+  async setBestAnswer(threadId, commentId) {
+    return this.request(`/threads/${threadId}/best-answer`, {
+      method: "PUT",
+      body: { comment_id: commentId },
+    });
+  }
+
+  // --- Search Endpoints ---
+
+  async searchThreads(query, categoryId = null, tag = null, limit = 20) {
+    const q = new URLSearchParams({ q: query, limit: String(limit) });
+    if (categoryId) q.set("category_id", categoryId);
+    if (tag) q.set("tag", tag);
+    return this.request(`/search?${q.toString()}`, {
+      method: "GET",
+    });
+  }
+
+  async getSearchSuggestions(prefix) {
+    const q = new URLSearchParams({ prefix });
+    return this.request(`/search/suggestions?${q.toString()}`, {
+      method: "GET",
+    });
+  }
+
+  // --- User & Reputation Endpoints ---
+
+  async getUserReputation(userId) {
+    return this.request(`/users/${userId}/reputation`, {
+      method: "GET",
     });
   }
 
@@ -203,6 +329,37 @@ export class ApiClient {
   async getModerationReports(status = "pending", limit = 20) {
     return this.request(`/moderation/reports?status=${status}&limit=${limit}`, {
       method: "GET",
+    });
+  }
+
+  async getReportDossier(reportId) {
+    return this.request(`/moderation/reports/${reportId}`, {
+      method: "GET",
+    });
+  }
+
+  async claimReport(reportId) {
+    return this.request(`/moderation/reports/${reportId}/review`, {
+      method: "PATCH",
+    });
+  }
+
+  async resolveReport(reportId, action, reasonNotes = "") {
+    return this.request(`/moderation/reports/${reportId}/actions`, {
+      method: "POST",
+      body: { action, reason: reasonNotes },
+    });
+  }
+
+  async createReport(targetType, targetId, reason, details = "") {
+    return this.request("/moderation/reports", {
+      method: "POST",
+      body: {
+        target_type: targetType,
+        target_id: targetId,
+        reason,
+        details,
+      },
     });
   }
 }

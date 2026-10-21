@@ -5,39 +5,83 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Forum Platform</title>
   <style>
+    /* ==========================================================================
+       TECHNICAL BRUTALISM × SWISS MINIMALISM DESIGN SYSTEM
+       ========================================================================== */
     :root {
-      --primary: #2563eb;
-      --primary-hover: #1d4ed8;
-      --bg: #0f172a;
-      --surface: #1e293b;
-      --surface-border: #334155;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --danger: #ef4444;
-      --success: #10b981;
-      --warning: #f59e0b;
+      --canvas: #080808;
+      --panel: #111111;
+      --panel-raised: #181818;
+      --border: #242424;
+      --border-focus: #383838;
+      --text: #F5F5F5;
+      --text-body: #D1D1D1;
+      --text-muted: #8A8A8A;
+      --success: #00FF66;
+      --neutral: #FFB800;
+      --destructive: #FF3333;
+      --accent: #FF5500;
+      
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
 
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      border-radius: 0px !important; /* Strict 0px brutalist radius */
     }
 
     body {
-      background-color: var(--bg);
+      background-color: var(--canvas);
+      /* Micro-dot grid background nominal 24px x 24px repeat */
+      background-image: radial-gradient(var(--border) 1px, transparent 1px);
+      background-size: 24px 24px;
       color: var(--text);
+      font-family: var(--font-sans);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* Header & Navigation */
+    /* Selection */
+    ::selection {
+      background-color: var(--text);
+      color: var(--canvas);
+    }
+
+    /* Mechanical Crosshair Utility */
+    .crosshair-panel {
+      position: relative;
+      background-color: var(--panel);
+      border: 1px solid var(--border);
+    }
+    .crosshair-panel::before,
+    .crosshair-panel::after {
+      content: "";
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      border: 1px solid var(--border-focus);
+      pointer-events: none;
+    }
+    .crosshair-panel::before {
+      top: -3px;
+      left: -3px;
+    }
+    .crosshair-panel::after {
+      bottom: -3px;
+      right: -3px;
+    }
+
+    /* Top Navigation Bar */
     header {
-      background-color: var(--surface);
-      border-bottom: 1px solid var(--surface-border);
-      padding: 1rem 2rem;
+      background-color: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -47,406 +91,863 @@
     }
 
     .brand {
-      font-size: 1.25rem;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
       font-weight: 700;
+      letter-spacing: 0.1em;
       color: var(--text);
+      cursor: pointer;
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      cursor: pointer;
     }
-
-    .brand span {
-      color: var(--primary);
+    .brand-tag {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
     }
 
     nav {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
-    .nav-btn {
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--text-muted);
-      padding: 0.5rem 1rem;
-      border-radius: 6px;
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .nav-btn:hover {
-      color: var(--text);
-      border-color: var(--surface-border);
-    }
-
-    .nav-btn.primary {
-      background-color: var(--primary);
-      color: #fff;
-    }
-
-    .nav-btn.primary:hover {
-      background-color: var(--primary-hover);
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 0.25rem 0.5rem;
+    /* Technical Buttons */
+    .btn {
+      font-family: var(--font-mono);
       font-size: 0.75rem;
-      font-weight: 600;
-      border-radius: 9999px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 0.6rem 1rem;
+      border: 1px solid var(--border);
+      background-color: var(--panel-raised);
+      color: var(--text);
+      cursor: pointer;
+      transition: background-color 40ms, color 40ms, border-color 40ms;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .btn:hover {
+      background-color: var(--text);
+      color: var(--canvas);
+      border-color: var(--text);
+    }
+    .btn:focus-visible {
+      outline: 2px solid var(--text);
+      outline-offset: 1px;
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      background-color: var(--panel);
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+    .btn-primary {
+      background-color: var(--text);
+      color: var(--canvas);
+      border-color: var(--text);
+    }
+    .btn-primary:hover {
+      background-color: #ffffff;
+      color: #000000;
+    }
+    .btn-destructive {
+      border-color: var(--destructive);
+      color: var(--destructive);
+    }
+    .btn-destructive:hover {
+      background-color: var(--destructive);
+      color: var(--canvas);
+    }
+    .btn-sm {
+      padding: 0.35rem 0.6rem;
+      font-size: 0.7rem;
+    }
+
+    /* Technical Status Tokens / Badges */
+    .token {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 0.15rem 0.45rem;
+      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
       text-transform: uppercase;
     }
+    .token-member { border-color: var(--border); color: var(--text-muted); }
+    .token-moderator { border-color: var(--success); color: var(--success); }
+    .token-admin { border-color: var(--accent); color: var(--accent); }
+    .token-pinned { border-color: var(--accent); color: var(--accent); background: rgba(255, 85, 0, 0.1); }
+    .token-locked { border-color: var(--destructive); color: var(--destructive); }
+    .token-resolved { border-color: var(--success); color: var(--success); background: rgba(0, 255, 102, 0.08); }
+    .token-pending { border-color: var(--neutral); color: var(--neutral); }
 
-    .badge-member { background: #334155; color: #cbd5e1; }
-    .badge-moderator { background: #065f46; color: #6ee7b7; }
-    .badge-admin { background: #7f1d1d; color: #fca5a5; }
-
-    /* Main Container */
+    /* Layout Main */
     main {
       flex: 1;
-      max-width: 1000px;
+      max-width: 1200px;
       width: 100%;
-      margin: 2rem auto;
+      margin: 1.5rem auto;
       padding: 0 1rem;
     }
 
-    /* Alerts and Feedback */
+    /* Technical Alerts */
     .alert {
-      padding: 1rem;
-      border-radius: 8px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      padding: 0.85rem 1.25rem;
       margin-bottom: 1.5rem;
+      border: 1px solid var(--border);
+      background-color: var(--panel);
       display: none;
-      font-size: 0.875rem;
+      align-items: center;
+      justify-content: space-between;
     }
+    .alert.info { border-color: var(--text-muted); color: var(--text); }
+    .alert.success { border-color: var(--success); color: var(--success); }
+    .alert.error { border-color: var(--destructive); color: var(--destructive); }
+    .alert.warning { border-color: var(--neutral); color: var(--neutral); }
 
-    .alert.info { background: #1e3a8a; border: 1px solid #3b82f6; color: #bfdbfe; }
-    .alert.success { background: #064e3b; border: 1px solid #10b981; color: #a7f3d0; }
-    .alert.error { background: #7f1d1d; border: 1px solid #ef4444; color: #fecaca; }
-    .alert.warning { background: #78350f; border: 1px solid #f59e0b; color: #fde68a; }
-
-    /* Card Panels */
-    .card {
-      background-color: var(--surface);
-      border: 1px solid var(--surface-border);
-      border-radius: 12px;
-      padding: 2rem;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-
-    .card h2 {
-      margin-bottom: 1rem;
-      font-size: 1.5rem;
-    }
-
-    .card p.subtitle {
-      color: var(--text-muted);
-      margin-bottom: 1.5rem;
-      font-size: 0.875rem;
-    }
-
-    /* Forms */
+    /* Form Inputs */
     .form-group {
       margin-bottom: 1.25rem;
     }
-
-    .form-group label {
-      display: block;
-      margin-bottom: 0.5rem;
-      font-size: 0.875rem;
+    .field-label {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.35rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .field-counter {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
       color: var(--text-muted);
     }
-
     .form-control {
       width: 100%;
-      padding: 0.75rem 1rem;
-      background: #0f172a;
-      border: 1px solid var(--surface-border);
-      border-radius: 6px;
+      padding: 0.65rem 0.85rem;
+      background-color: var(--canvas);
+      border: 1px solid var(--border);
       color: var(--text);
-      font-size: 0.95rem;
+      font-family: var(--font-sans);
+      font-size: 0.875rem;
+      transition: border-color 40ms;
     }
-
     .form-control:focus {
       outline: none;
-      border-color: var(--primary);
+      border-color: var(--text);
+    }
+    textarea.form-control {
+      resize: vertical;
+      min-height: 120px;
     }
 
-    .btn-group {
+    /* Six-Slot OTP Container */
+    .otp-container {
       display: flex;
-      gap: 1rem;
-      margin-top: 1.5rem;
+      gap: 0.5rem;
+      margin: 1rem 0;
+      justify-content: space-between;
     }
-
-    .btn {
-      padding: 0.75rem 1.5rem;
-      border-radius: 6px;
-      border: none;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
+    .otp-slot {
+      width: 48px;
+      height: 56px;
+      text-align: center;
+      font-family: var(--font-mono);
+      font-size: 1.5rem;
+      font-weight: 700;
+      background-color: var(--canvas);
+      border: 1px solid var(--border);
+      color: var(--text);
     }
-
-    .btn-primary { background: var(--primary); color: #fff; }
-    .btn-primary:hover { background: var(--primary-hover); }
-    .btn-secondary { background: #334155; color: var(--text); }
-    .btn-secondary:hover { background: #475569; }
-    .btn-danger { background: var(--danger); color: #fff; }
+    .otp-slot:focus {
+      outline: none;
+      border-color: var(--text);
+      background-color: var(--panel-raised);
+    }
 
     /* Views */
     .view { display: none; }
     .view.active { display: block; }
 
+    /* Feed Layout (Sidebar + Thread List) */
+    .feed-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+    @media (max-width: 768px) {
+      .feed-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .sidebar-panel {
+      padding: 1rem;
+    }
+    .sidebar-title {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .category-filter-item {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 0.4rem 0.5rem;
+      color: var(--text-body);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      border-left: 2px solid transparent;
+    }
+    .category-filter-item:hover {
+      background-color: var(--panel-raised);
+      color: var(--text);
+    }
+    .category-filter-item.active {
+      border-left-color: var(--text);
+      color: var(--text);
+      background-color: var(--panel-raised);
+      font-weight: 700;
+    }
+
     /* Thread Item */
-    .thread-list {
+    .thread-card {
+      background-color: var(--panel);
+      border: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+      margin-bottom: 0.75rem;
+      transition: border-color 60ms;
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 1rem;
+    }
+    .thread-card:hover {
+      border-color: var(--border-focus);
+    }
+    .thread-vote-col {
       display: flex;
       flex-direction: column;
-      gap: 1rem;
-      margin-top: 1.5rem;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.25rem;
+    }
+    .vote-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      width: 32px;
+      height: 32px;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .vote-btn:hover {
+      border-color: var(--text);
+      color: var(--text);
+    }
+    .vote-btn.active-up {
+      border-color: var(--success);
+      color: var(--success);
+    }
+    .vote-btn.active-down {
+      border-color: var(--destructive);
+      color: var(--destructive);
+    }
+    .vote-counter {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
     }
 
-    .thread-item {
-      background: #0f172a;
-      border: 1px solid var(--surface-border);
-      padding: 1.25rem;
-      border-radius: 8px;
+    .thread-main-col {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
     }
-
-    .thread-title {
-      font-size: 1.15rem;
+    .thread-title-link {
+      font-size: 1.05rem;
       font-weight: 600;
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .thread-title-link:hover {
+      text-decoration: underline;
+    }
+    .thread-meta-row {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    /* Cursor Pagination Bar */
+    .pagination-bar {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      background-color: var(--panel);
+      border: 1px solid var(--border);
+      margin-top: 1rem;
+    }
+
+    /* Thread Detail & Comments */
+    .thread-detail-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .thread-detail-body {
+      padding: 1.5rem;
+      color: var(--text-body);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    .markdown-content pre {
+      background-color: var(--canvas);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      margin: 1rem 0;
+    }
+    .markdown-content code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      background: var(--panel-raised);
+      padding: 0.1em 0.3em;
+    }
+    .markdown-content p {
+      margin-bottom: 1rem;
+    }
+    .markdown-content blockquote {
+      border-left: 2px solid var(--border-focus);
+      padding-left: 1rem;
+      color: var(--text-muted);
+      margin: 1rem 0;
+    }
+
+    /* Comment Tree */
+    .comments-section {
+      margin-top: 2rem;
+    }
+    .comment-node {
+      border-left: 2px solid var(--border);
+      padding-left: 1rem;
+      margin-top: 1rem;
+    }
+    .comment-node.best-answer {
+      border-left: 2px solid var(--success);
+      background-color: rgba(0, 255, 102, 0.03);
+    }
+    .comment-meta {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
       margin-bottom: 0.5rem;
     }
 
-    .thread-meta {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      display: flex;
-      gap: 1rem;
+    /* Modals & Drawers */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: rgba(8, 8, 8, 0.85);
+      z-index: 500;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-dialog {
+      width: 100%;
+      max-width: 520px;
+      padding: 2rem;
+      background-color: var(--panel);
+      border: 1px solid var(--border);
+      position: relative;
     }
 
-    /* Admin Table */
+    /* Global Drawer for Reporting */
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: -420px;
+      width: 400px;
+      max-width: 100vw;
+      height: 100vh;
+      background-color: var(--panel);
+      border-left: 1px solid var(--border);
+      z-index: 600;
+      transition: right 120ms ease;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer.open {
+      right: 0;
+    }
+
+    /* Tabular Data / Tables */
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 1rem;
-      font-size: 0.875rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
     }
-
     th, td {
-      padding: 0.75rem;
+      padding: 0.65rem 0.75rem;
       text-align: left;
-      border-bottom: 1px solid var(--surface-border);
+      border-bottom: 1px solid var(--border);
     }
-
     th {
       color: var(--text-muted);
-      font-weight: 600;
-    }
-
-    /* OTP timer */
-    .countdown-timer {
-      font-size: 0.85rem;
-      color: var(--warning);
-      margin-top: 0.5rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
   </style>
 </head>
 <body>
+  <!-- Header -->
   <header>
-    <div class="brand" id="brand-logo">Forum<span>Platform</span></div>
+    <div class="brand" id="brand-logo" data-app="ForumPlatform">Forum<span>Platform</span> <span class="brand-tag">GATEWAY:8000</span></div>
     <nav id="navbar">
-      <!-- Dynamic Nav Items via app.js -->
+      <!-- Injected via app.js -->
     </nav>
   </header>
 
+  <!-- Global Alert Notice -->
   <main>
-    <div id="global-alert" class="alert"></div>
+    <div id="global-alert" class="alert">
+      <span id="global-alert-text"></span>
+      <button class="btn btn-sm" id="global-alert-close" style="padding: 2px 6px;">[X]</button>
+    </div>
 
-    <!-- VIEW: Home / Threads -->
+    <!-- ======================================================================
+         SCREEN 03: FEED & CATEGORIES
+         ====================================================================== -->
     <section id="view-home" class="view active">
-      <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <h2>Community Discussions</h2>
-            <p class="subtitle">Read the latest community topics or start your own discussion.</p>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div>
+          <h2 style="font-family: var(--font-mono); font-size: 1.25rem; font-weight: 700; letter-spacing: 0.05em;">Community Discussions</h2>
+          <p style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono);">Discussions Synchronized with Content Service</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <input type="text" id="feed-search-input" class="form-control" placeholder="Search threads (prefix)..." style="width: 240px; font-family: var(--font-mono); font-size: 0.8rem;" />
+          <button id="btn-create-thread-view" class="btn btn-primary" style="display: none;">+ NEW THREAD</button>
+        </div>
+      </div>
+
+      <div class="feed-layout">
+        <!-- Sidebar Categories -->
+        <div class="crosshair-panel sidebar-panel">
+          <div class="sidebar-title">CATEGORIES</div>
+          <div id="category-filter-list">
+            <div class="category-filter-item active" data-id="">ALL CHANNELS</div>
+            <!-- Dynamic categories -->
           </div>
-          <button id="btn-create-thread-view" class="btn btn-primary" style="display: none;">+ New Thread</button>
         </div>
 
-        <div id="thread-container" class="thread-list">
-          <p class="subtitle" style="text-align: center; padding: 2rem;">Loading discussions...</p>
+        <!-- Thread List -->
+        <div>
+          <div id="thread-container">
+            <div class="crosshair-panel" style="padding: 2rem; text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.8rem;">
+              [LOADING_INDEX...]
+            </div>
+          </div>
+
+          <!-- Pagination -->
+          <div class="pagination-bar" id="feed-pagination" style="display: none;">
+            <div>CURSOR: <span id="pagination-cursor-val" style="color: var(--text-muted);">-</span></div>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn btn-sm" id="btn-paginate-next">NEXT PAGE &rarr;</button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- VIEW: Register -->
+    <!-- ======================================================================
+         SCREEN 01: REGISTRATION & 6-SLOT OTP
+         ====================================================================== -->
     <section id="view-register" class="view">
-      <div class="card" style="max-width: 480px; margin: 0 auto;">
-        <h2>Create an Account</h2>
-        <p class="subtitle">Join ForumPlatform. We will send a one-time verification code to your email.</p>
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// REGISTRATION_INIT</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          SUBMIT CREDENTIALS FOR 202 ACCEPTED ANTI-ENUMERATION CHALLENGE.
+        </p>
+
         <form id="form-register">
           <div class="form-group">
-            <label for="reg-username">Username</label>
-            <input type="text" id="reg-username" class="form-control" placeholder="alphanumeric, 3-30 chars" required />
+            <label class="field-label" for="reg-username">
+              <span>USERNAME</span>
+              <span class="field-counter" id="reg-user-req">3-30 CHARS, ALPHANUMERIC</span>
+            </label>
+            <input type="text" id="reg-username" class="form-control" autocomplete="username" required />
           </div>
+
           <div class="form-group">
-            <label for="reg-email">Email Address</label>
-            <input type="email" id="reg-email" class="form-control" placeholder="you@example.com" required />
+            <label class="field-label" for="reg-email">
+              <span>EMAIL ADDRESS</span>
+              <span class="field-counter">SECURE RECIPIENT</span>
+            </label>
+            <input type="email" id="reg-email" class="form-control" autocomplete="email" required />
           </div>
+
           <div class="form-group">
-            <label for="reg-password">Password</label>
-            <input type="password" id="reg-password" class="form-control" placeholder="Minimum 8 characters" required />
+            <label class="field-label" for="reg-password">
+              <span>PASSWORD</span>
+              <span class="field-counter">MIN 8 CHARACTERS</span>
+            </label>
+            <div style="display: flex;">
+              <input type="password" id="reg-password" class="form-control" autocomplete="new-password" required />
+              <button type="button" class="btn btn-sm" id="btn-toggle-reg-pw" style="border-left: 0;">SHOW</button>
+            </div>
           </div>
-          <div class="btn-group">
-            <button type="submit" class="btn btn-primary" id="btn-reg-submit">Register</button>
-            <button type="button" class="btn btn-secondary" id="btn-goto-login">Have an account? Log in</button>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-reg-submit" style="flex: 1;">TRANSMIT_REGISTRATION</button>
+            <button type="button" class="btn" id="btn-goto-login">LOGIN</button>
           </div>
         </form>
       </div>
     </section>
 
-    <!-- VIEW: Verify OTP -->
+    <!-- VERIFY OTP VIEW (Screen 01 Step 2) -->
     <section id="view-verify-otp" class="view">
-      <div class="card" style="max-width: 480px; margin: 0 auto;">
-        <h2>Verify Your Email</h2>
-        <p class="subtitle">Enter the 6-digit code sent to your email address.</p>
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// OTP_CHALLENGE_VERIFY</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          ENTER 6-DIGIT VERIFICATION CODE TRANSMITTED TO RECIPIENT.
+        </p>
+
         <form id="form-verify-otp">
           <div class="form-group">
-            <label for="verify-email">Email Address</label>
-            <input type="email" id="verify-email" class="form-control" required readonly />
+            <label class="field-label" for="verify-email">TARGET ACCOUNT EMAIL</label>
+            <input type="email" id="verify-email" class="form-control" readonly />
           </div>
+
           <div class="form-group">
-            <label for="verify-otp-code">6-Digit Code</label>
-            <input type="text" id="verify-otp-code" class="form-control" maxlength="6" pattern="[0-9]{6}" placeholder="123456" required />
-            <div id="otp-timer" class="countdown-timer">Code valid for 10 minutes.</div>
+            <label class="field-label">
+              <span>6-SLOT NUMERIC OTP</span>
+              <span class="field-counter" id="otp-timer-counter" style="color: var(--neutral);">EXPIRY: 600S</span>
+            </label>
+            <div class="otp-container" id="otp-inputs-wrapper">
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="0" autofocus />
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="1" />
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="2" />
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="3" />
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="4" />
+              <input type="text" maxlength="1" pattern="[0-9]" class="otp-slot" data-index="5" />
+            </div>
+            <!-- Visible input for direct entry or automation fill -->
+            <input type="text" id="verify-otp-code" class="form-control" maxlength="6" pattern="[0-9]{6}" placeholder="6-digit code or use slots above" style="margin-top: 0.5rem; font-family: var(--font-mono); letter-spacing: 0.2em; text-align: center;" />
           </div>
-          <div class="btn-group">
-            <button type="submit" class="btn btn-primary" id="btn-verify-submit">Verify & Activate</button>
-            <button type="button" class="btn btn-secondary" id="btn-resend-otp">Resend Code</button>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-verify-submit" style="flex: 1;">VERIFY & ACTIVATE</button>
+            <button type="button" class="btn" id="btn-resend-otp">RESEND (60S)</button>
           </div>
         </form>
       </div>
     </section>
 
-    <!-- VIEW: Login -->
+    <!-- ======================================================================
+         SCREEN 02: LOGIN & SESSION
+         ====================================================================== -->
     <section id="view-login" class="view">
-      <div class="card" style="max-width: 480px; margin: 0 auto;">
-        <h2>Welcome Back</h2>
-        <p class="subtitle">Sign in to your ForumPlatform account.</p>
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// OPERATOR_AUTHENTICATION</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          ESTABLISH AUTHENTICATED SESSION COOKIE VIA API GATEWAY.
+        </p>
+
         <form id="form-login">
           <div class="form-group">
-            <label for="login-identifier">Username or Email</label>
-            <input type="text" id="login-identifier" class="form-control" required />
+            <label class="field-label" for="login-identifier">IDENTIFIER (USERNAME OR EMAIL)</label>
+            <input type="text" id="login-identifier" class="form-control" autocomplete="username" required />
           </div>
+
           <div class="form-group">
-            <label for="login-password">Password</label>
-            <input type="password" id="login-password" class="form-control" required />
+            <label class="field-label" for="login-password">PASSWORD</label>
+            <div style="display: flex;">
+              <input type="password" id="login-password" class="form-control" autocomplete="current-password" required />
+              <button type="button" class="btn btn-sm" id="btn-toggle-login-pw" style="border-left: 0;">SHOW</button>
+            </div>
           </div>
-          <div class="btn-group">
-            <button type="submit" class="btn btn-primary" id="btn-login-submit">Log In</button>
-            <button type="button" class="btn btn-secondary" id="btn-goto-register">Need an account? Register</button>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-login-submit" style="flex: 1;">SIGN_IN</button>
+            <button type="button" class="btn" id="btn-goto-register">REGISTER</button>
           </div>
         </form>
       </div>
     </section>
 
-    <!-- VIEW: Profile -->
-    <section id="view-profile" class="view">
-      <div class="card" style="max-width: 600px; margin: 0 auto;">
-        <h2>User Profile</h2>
-        <p class="subtitle">Your account and session information.</p>
-        <div id="profile-details" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
-          <!-- Profile details injected dynamically -->
-        </div>
-        <div class="btn-group">
-          <button id="btn-profile-logout" class="btn btn-danger">Log Out</button>
-        </div>
+    <!-- ======================================================================
+         SCREEN 04: THREAD DETAIL, COMMENTS & VOTING
+         ====================================================================== -->
+    <section id="view-thread-detail" class="view">
+      <div style="margin-bottom: 1rem;">
+        <button class="btn btn-sm" id="btn-back-to-feed">&larr; BACK TO FEED</button>
+      </div>
+
+      <div class="crosshair-panel" id="thread-detail-container">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Add Comment Box -->
+      <div class="crosshair-panel" style="margin-top: 1.5rem; padding: 1.5rem;" id="add-comment-panel">
+        <h3 style="font-family: var(--font-mono); font-size: 0.85rem; margin-bottom: 0.5rem;">// SUBMIT_RESPONSE</h3>
+        <form id="form-create-comment">
+          <div class="form-group">
+            <textarea id="comment-body-input" class="form-control" placeholder="Write response in technical markdown..." required></textarea>
+          </div>
+          <div style="display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn btn-primary">POST COMMENT</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Comments Stream -->
+      <div class="comments-section" id="comments-container">
+        <!-- Rendered dynamically -->
       </div>
     </section>
 
-    <!-- VIEW: Create Thread -->
+    <!-- ======================================================================
+         SCREEN 05: THREAD EDITOR (CREATION)
+         ====================================================================== -->
     <section id="view-create-thread" class="view">
-      <div class="card" style="max-width: 640px; margin: 0 auto;">
-        <h2>Create Discussion Thread</h2>
-        <p class="subtitle">Share insights, ask questions, or start a debate.</p>
+      <div class="crosshair-panel" style="max-width: 800px; margin: 1.5rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// NEW_THREAD_SUBMISSION</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          TECHNICAL MARKDOWN SPECIFICATION. ATTACHMENT UPLOADS ARE LOCAL PREVIEW ONLY.
+        </p>
+
         <form id="form-create-thread">
           <div class="form-group">
-            <label for="thread-title">Title</label>
-            <input type="text" id="thread-title" class="form-control" placeholder="Descriptive title" required />
+            <label class="field-label" for="thread-title">
+              <span>TITLE</span>
+              <span class="field-counter" id="title-char-counter">0 / 200</span>
+            </label>
+            <input type="text" id="thread-title" class="form-control" maxlength="200" placeholder="Concise architectural description..." required />
           </div>
+
           <div class="form-group">
-            <label for="thread-category">Category</label>
+            <label class="field-label" for="thread-category">TARGET CATEGORY</label>
             <select id="thread-category" class="form-control" required>
-              <!-- Populated via API -->
+              <!-- Dynamic -->
             </select>
           </div>
+
           <div class="form-group">
-            <label for="thread-content">Content</label>
-            <textarea id="thread-content" class="form-control" rows="5" placeholder="Write your post here..." required></textarea>
+            <label class="field-label" for="thread-content">
+              <span>SPECIFICATION BODY (MARKDOWN)</span>
+              <span class="field-counter" id="body-char-counter">0 / 50000</span>
+            </label>
+            <!-- Markdown Formatting Bar -->
+            <div style="display: flex; gap: 0.25rem; margin-bottom: 0.25rem;">
+              <button type="button" class="btn btn-sm" id="md-btn-bold">B</button>
+              <button type="button" class="btn btn-sm" id="md-btn-code">`CODE`</button>
+              <button type="button" class="btn btn-sm" id="md-btn-quote">&gt; QUOTE</button>
+            </div>
+            <textarea id="thread-content" class="form-control" rows="8" placeholder="Enter content formatted in markdown..." required></textarea>
           </div>
-          <div class="btn-group">
-            <button type="submit" class="btn btn-primary">Publish Thread</button>
-            <button type="button" class="btn btn-secondary" id="btn-cancel-create-thread">Cancel</button>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-submit-thread">PUBLISH THREAD</button>
+            <button type="button" class="btn" id="btn-cancel-create-thread">CANCEL</button>
           </div>
         </form>
       </div>
     </section>
 
-    <!-- VIEW: Admin Panel (Admin / Moderator) -->
+    <!-- ======================================================================
+         SCREEN 06: MODERATION QUEUE & DOSSIER (ADMIN / MODERATOR)
+         ====================================================================== -->
     <section id="view-admin" class="view">
-      <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <div>
-            <h2>Administration & Moderation</h2>
-            <p class="subtitle">Role-aware management tools for platform operators.</p>
+      <div class="crosshair-panel" style="padding: 1.5rem; margin-bottom: 1.5rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// MODERATION_OPERATIONS</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono);">
+          ROLE-AWARE AUDIT QUEUE. STATUS TRANSITIONS REQUIRE ACTIVE CLAIM.
+        </p>
+      </div>
+
+      <!-- Tabs / Filter -->
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+        <button class="btn btn-sm" id="mod-tab-pending">STATUS: PENDING</button>
+        <button class="btn btn-sm" id="mod-tab-claimed">STATUS: CLAIMED</button>
+        <button class="btn btn-sm" id="mod-tab-resolved">STATUS: RESOLVED</button>
+      </div>
+
+      <div class="crosshair-panel" style="padding: 1rem; margin-bottom: 1.5rem;">
+        <div id="moderation-reports-container">
+          <table>
+            <thead>
+              <tr>
+                <th>REPORT_ID</th>
+                <th>TARGET</th>
+                <th>REASON</th>
+                <th>STATUS</th>
+                <th>SUBMITTED</th>
+                <th>ACTION</th>
+              </tr>
+            </thead>
+            <tbody id="moderation-reports-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Admin Accounts Section (Admin Only) -->
+      <div class="crosshair-panel" id="admin-user-section" style="padding: 1rem;">
+        <div class="sidebar-title">REGISTERED ACCOUNTS (ADMIN PRIVILEGE ONLY)</div>
+        <div id="admin-user-table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>USERNAME</th>
+                <th>EMAIL</th>
+                <th>ROLE</th>
+                <th>STATUS</th>
+                <th>MUTATE ROLE</th>
+              </tr>
+            </thead>
+            <tbody id="admin-user-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================================
+         SCREEN 07: USER PROFILE & REPUTATION
+         ====================================================================== -->
+    <section id="view-profile" class="view">
+      <div class="crosshair-panel" style="max-width: 720px; margin: 1.5rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 1rem;">// USER_IDENTITY_DOSSIER</h2>
+
+        <div id="profile-details" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; font-family: var(--font-mono); font-size: 0.85rem;">
+          <!-- Dynamically populated -->
+        </div>
+
+        <div style="border-top: 1px solid var(--border); padding-top: 1.5rem; margin-top: 1.5rem;">
+          <div class="sidebar-title">SAVED BOOKMARKS</div>
+          <div id="user-bookmarks-list" style="margin-top: 0.5rem; font-size: 0.85rem;">
+            <p style="color: var(--text-muted); font-family: var(--font-mono);">[NO_BOOKMARKS_RECORDED]</p>
           </div>
         </div>
 
-        <div id="admin-user-section">
-          <h3>Registered Accounts (Admin Only)</h3>
-          <div id="admin-user-table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="admin-user-tbody">
-                <!-- Dynamically loaded -->
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div id="moderation-queue-section" style="margin-top: 2rem;">
-          <h3>Moderation Queue (Moderator / Admin)</h3>
-          <div id="moderation-reports-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Target Type</th>
-                  <th>Reason</th>
-                  <th>Status</th>
-                  <th>Submitted</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="moderation-reports-tbody">
-                <!-- Dynamically loaded -->
-              </tbody>
-            </table>
-          </div>
+        <div style="margin-top: 2rem; display: flex; gap: 0.75rem;">
+          <button id="btn-profile-logout" class="btn btn-destructive">TERMINATE SESSION</button>
         </div>
       </div>
     </section>
   </main>
+
+  <!-- ========================================================================
+       GLOBAL MODERATION CONFLICT MODAL (409 Conflict)
+       ======================================================================== -->
+  <div class="modal-overlay" id="conflict-modal">
+    <div class="crosshair-panel modal-dialog">
+      <h3 style="font-family: var(--font-mono); font-size: 1rem; color: var(--destructive); margin-bottom: 0.75rem;">
+        // CONFLICT_EXCEPTION (HTTP 409)
+      </h3>
+      <p id="conflict-modal-message" style="font-size: 0.85rem; color: var(--text-body); margin-bottom: 1rem;">
+        This resource cannot be directly deleted because active dependencies or comments exist.
+      </p>
+      <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); background: var(--canvas); padding: 0.75rem; border: 1px solid var(--border); margin-bottom: 1.5rem;">
+        REASON: THREAD_REQUIRES_MODERATION<br/>
+        RESOLUTION: SUBMIT A MODERATION FLAG FOR OPERATOR REVIEW.
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button class="btn btn-sm" id="btn-conflict-dismiss">DISMISS</button>
+        <button class="btn btn-sm btn-destructive" id="btn-conflict-open-flag">FLAG FOR MODERATOR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       GLOBAL REPORT DRAWER
+       ======================================================================== -->
+  <div class="drawer" id="report-drawer">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; margin-bottom: 1rem;">
+      <h3 style="font-family: var(--font-mono); font-size: 0.9rem;">// SUBMIT_MODERATION_REPORT</h3>
+      <button class="btn btn-sm" id="btn-close-report-drawer">[X]</button>
+    </div>
+
+    <form id="form-submit-report" style="display: flex; flex-direction: column; flex: 1;">
+      <input type="hidden" id="report-target-type" />
+      <input type="hidden" id="report-target-id" />
+
+      <div class="form-group">
+        <label class="field-label">TARGET REFERENCE</label>
+        <div id="report-target-ref" style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); background: var(--canvas); padding: 0.5rem; border: 1px solid var(--border);"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="field-label" for="report-reason-select">VIOLATION CATEGORY</label>
+        <select id="report-reason-select" class="form-control" required>
+          <option value="spam">SPAM / UNWANTED PROMOTION</option>
+          <option value="abuse">ABUSE / INAPPROPRIATE BEHAVIOR</option>
+          <option value="harassment">HARASSMENT / THREATS</option>
+          <option value="wrong_category">WRONG CATEGORY / OFF-TOPIC</option>
+          <option value="misinformation">MISINFORMATION / DECEPTIVE</option>
+          <option value="other">OTHER POLICY VIOLATION</option>
+        </select>
+      </div>
+
+      <div class="form-group" style="flex: 1; display: flex; flex-direction: column;">
+        <label class="field-label" for="report-details-input">INCIDENT EVIDENCE & DETAILS</label>
+        <textarea id="report-details-input" class="form-control" style="flex: 1; resize: none;" placeholder="Explain why this content violates community guidelines..."></textarea>
+      </div>
+
+      <div style="margin-top: 1rem;">
+        <button type="submit" class="btn btn-destructive" style="width: 100%;">TRANSMIT REPORT</button>
+      </div>
+    </form>
+  </div>
 
   <script type="module" src="/static/src/app.js"></script>
 </body>
