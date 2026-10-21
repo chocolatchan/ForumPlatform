@@ -2,3 +2,7 @@
 venv/
 .pytest_cache/
 .ruff_cache/
+
+# Benchmark raw traces
+docs/audit/performance/**/*.jsonl
+*.jsonl

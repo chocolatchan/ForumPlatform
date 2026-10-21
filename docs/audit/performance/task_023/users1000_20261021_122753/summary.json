@@ -1,0 +1,25 @@
+{
+  "users_1000_journey": {
+    "concurrent_simulated_users": 1000,
+    "duration_seconds": 63.85019216299952,
+    "total_requests": 16874,
+    "successful_requests": 16873,
+    "failed_requests": 1,
+    "achieved_rps": 264.27485068366474,
+    "successful_rps": 264.259189023674,
+    "latency_p50_ms": 78.94387350006582,
+    "latency_p90_ms": 3274.4918665990567,
+    "latency_p95_ms": 4854.905443249207,
+    "latency_p99_ms": 6745.512673210163,
+    "latency_min_ms": 2.7297979995637434,
+    "latency_max_ms": 11019.613365000623,
+    "status_distribution": {
+      "200": 16040,
+      "201": 833,
+      "500": 1
+    },
+    "errors": {
+      "RemoteProtocolError": 1
+    }
+  }
+}

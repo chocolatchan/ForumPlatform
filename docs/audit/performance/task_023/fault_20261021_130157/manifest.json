@@ -1,0 +1,10 @@
+{
+  "run_id": "fault_20261021_130157",
+  "git_commit_sha": "48d10ceeb5f02259893d58a2e5d05b682742fdc0",
+  "timestamp_utc": "2026-10-21T13:02:37.919460+00:00",
+  "host": {
+    "os": "Linux",
+    "cpu_architecture": "x86_64",
+    "cpu_cores": 16
+  }
+}

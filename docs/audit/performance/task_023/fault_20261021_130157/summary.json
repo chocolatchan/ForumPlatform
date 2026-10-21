@@ -1,0 +1,375 @@
+{
+  "run_id": "fault_20261021_130157",
+  "fault_type": "downstream_microservice_pause (forum_search_service)",
+  "bulkhead_isolation_verified": true,
+  "graceful_gateway_degradation_verified": true,
+  "self_healing_recovery_verified": true,
+  "events_log": [
+    {
+      "stage": "pre_fault",
+      "status": "healthy"
+    },
+    {
+      "stage": "fault_injected",
+      "action": "docker pause forum_search_service",
+      "timestamp": 1792587717.664572
+    },
+    {
+      "stage": "fault_recovered",
+      "action": "docker unpause forum_search_service",
+      "timestamp": 1792587751.0358477
+    }
+  ],
+  "records": [
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "pre_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "create_thread",
+      "status": 201
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "create_thread",
+      "status": 201
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "create_thread",
+      "status": 201
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "create_thread",
+      "status": 201
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "create_thread",
+      "status": 201
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "during_fault",
+      "target": "search",
+      "status": 504
+    },
+    {
+      "stage": "during_fault",
+      "target": "threads",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    },
+    {
+      "stage": "post_recovery",
+      "target": "search",
+      "status": 200
+    }
+  ]
+}

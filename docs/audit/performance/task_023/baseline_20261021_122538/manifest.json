@@ -1,0 +1,194 @@
+{
+  "run_id": "baseline_20261021_122538",
+  "git_commit_sha": "48d10ceeb5f02259893d58a2e5d05b682742fdc0",
+  "timestamp_utc": "2026-10-21T12:26:00.932999+00:00",
+  "host": {
+    "os": "Linux",
+    "kernel": "7.2.9-1-cachyos",
+    "cpu_architecture": "x86_64",
+    "cpu_cores": 16
+  },
+  "target": "http://localhost:8000",
+  "container_stats_pre": {
+    "forum_api_gateway": {
+      "cpu_percent": "0.09%",
+      "mem_usage": "63.07MiB / 15.28GiB",
+      "mem_percent": "0.40%"
+    },
+    "forum_content_service": {
+      "cpu_percent": "0.18%",
+      "mem_usage": "79.97MiB / 15.28GiB",
+      "mem_percent": "0.51%"
+    },
+    "forum_moderation_service": {
+      "cpu_percent": "0.18%",
+      "mem_usage": "51.23MiB / 15.28GiB",
+      "mem_percent": "0.33%"
+    },
+    "forum_search_service": {
+      "cpu_percent": "0.07%",
+      "mem_usage": "50.15MiB / 15.28GiB",
+      "mem_percent": "0.32%"
+    },
+    "forum_user_service": {
+      "cpu_percent": "0.25%",
+      "mem_usage": "77.51MiB / 15.28GiB",
+      "mem_percent": "0.50%"
+    },
+    "forum_interaction_service": {
+      "cpu_percent": "0.24%",
+      "mem_usage": "49.82MiB / 15.28GiB",
+      "mem_percent": "0.32%"
+    },
+    "forum_notification_service": {
+      "cpu_percent": "0.10%",
+      "mem_usage": "47.57MiB / 15.28GiB",
+      "mem_percent": "0.30%"
+    },
+    "forum_postgres": {
+      "cpu_percent": "0.10%",
+      "mem_usage": "132.5MiB / 15.28GiB",
+      "mem_percent": "0.85%"
+    },
+    "forum_redis": {
+      "cpu_percent": "0.28%",
+      "mem_usage": "3.164MiB / 15.28GiB",
+      "mem_percent": "0.02%"
+    },
+    "forum_mailpit": {
+      "cpu_percent": "0.00%",
+      "mem_usage": "32.88MiB / 15.28GiB",
+      "mem_percent": "0.21%"
+    }
+  },
+  "container_stats_post": {
+    "forum_api_gateway": {
+      "cpu_percent": "0.12%",
+      "mem_usage": "64.82MiB / 15.28GiB",
+      "mem_percent": "0.41%"
+    },
+    "forum_content_service": {
+      "cpu_percent": "0.19%",
+      "mem_usage": "81.56MiB / 15.28GiB",
+      "mem_percent": "0.52%"
+    },
+    "forum_moderation_service": {
+      "cpu_percent": "0.21%",
+      "mem_usage": "50.18MiB / 15.28GiB",
+      "mem_percent": "0.32%"
+    },
+    "forum_search_service": {
+      "cpu_percent": "0.09%",
+      "mem_usage": "50.66MiB / 15.28GiB",
+      "mem_percent": "0.32%"
+    },
+    "forum_user_service": {
+      "cpu_percent": "0.19%",
+      "mem_usage": "76.94MiB / 15.28GiB",
+      "mem_percent": "0.49%"
+    },
+    "forum_interaction_service": {
+      "cpu_percent": "0.21%",
+      "mem_usage": "50.05MiB / 15.28GiB",
+      "mem_percent": "0.32%"
+    },
+    "forum_notification_service": {
+      "cpu_percent": "0.11%",
+      "mem_usage": "47.52MiB / 15.28GiB",
+      "mem_percent": "0.30%"
+    },
+    "forum_postgres": {
+      "cpu_percent": "1.34%",
+      "mem_usage": "134.3MiB / 15.28GiB",
+      "mem_percent": "0.86%"
+    },
+    "forum_redis": {
+      "cpu_percent": "0.30%",
+      "mem_usage": "3.781MiB / 15.28GiB",
+      "mem_percent": "0.02%"
+    },
+    "forum_mailpit": {
+      "cpu_percent": "1.93%",
+      "mem_usage": "33.31MiB / 15.28GiB",
+      "mem_percent": "0.21%"
+    }
+  },
+  "outbox_stats_pre": {
+    "gateway": [],
+    "content": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"content-service\"} 5.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"content-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"content-service\"} 0.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ],
+    "notification": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"notification-service\"} 1.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"notification-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"notification-service\"} -4.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ],
+    "search": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"search-service\"} 5.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"search-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"search-service\"} 0.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ]
+  },
+  "outbox_stats_post": {
+    "gateway": [],
+    "content": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"content-service\"} 5.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"content-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"content-service\"} 0.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ],
+    "notification": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"notification-service\"} 1.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"notification-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"notification-service\"} -4.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ],
+    "search": [
+      "# HELP database_pool_checked_in Available idle database connections in pool",
+      "# TYPE database_pool_checked_in gauge",
+      "database_pool_checked_in{service=\"search-service\"} 5.0",
+      "# HELP database_pool_checked_out Active checked out database connections in pool",
+      "# TYPE database_pool_checked_out gauge",
+      "database_pool_checked_out{service=\"search-service\"} 0.0",
+      "# HELP database_pool_overflow Active overflow connections beyond pool size",
+      "# TYPE database_pool_overflow gauge",
+      "database_pool_overflow{service=\"search-service\"} 0.0",
+      "# HELP database_pool_size Current configured database connection pool size"
+    ]
+  }
+}
