@@ -17,6 +17,7 @@ COPY src/ /app/src/
 COPY docs/ /app/docs/
 COPY migrations/ /app/migrations/
 COPY scripts/ /app/scripts/
+COPY frontend/ /app/frontend/
 
 EXPOSE 8000 8001 8002 8003 8004 8005 8006
 

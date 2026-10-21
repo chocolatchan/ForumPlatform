@@ -1,0 +1,13 @@
+{
+  "timestamp": "20261021_084751Z",
+  "databases": [
+  "forum_users",
+  "forum_content",
+  "forum_interactions",
+  "forum_moderation",
+  "forum_notifications",
+  "forum_search"
+],
+  "backup_format": "pg_dump -Fc (custom)",
+  "status": "completed"
+}

@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from src.common.errors import register_canonical_error_handlers
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
 from src.services.search.auth import (
     SearchUser,
     get_auth_http_client,
@@ -30,6 +31,7 @@ from src.services.search.schemas import ConsumedEventPayload
 logger = logging.getLogger(__name__)
 
 configure_logging(search_settings.service_name, search_settings.log_level)
+metrics_registry = MetricsRegistry(search_settings.service_name)
 
 
 @asynccontextmanager
@@ -45,6 +47,7 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(app, metrics_registry, db_manager=search_db)
 
 
 # --- Cursor Pagination Helpers ---

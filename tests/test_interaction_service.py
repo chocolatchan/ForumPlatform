@@ -202,20 +202,20 @@ async def test_thread_and_comment_voting_lifecycle():
     transport = ASGITransport(app=interaction_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Self-vote attempt rejected (400 SELF_VOTE_NOT_ALLOWED)
+        client.cookies.set("forum_session", author_sess)
         res_self = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": 1},
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_self.status_code == 400
         assert res_self.json()["error"]["code"] == "SELF_VOTE_NOT_ALLOWED"
 
         # 2. Voter 1 upvotes thread (+1)
+        client.cookies.set("forum_session", voter1_sess)
         res_v1 = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": 1},
-            cookies={"forum_session": voter1_sess},
             headers={"X-CSRF-Token": voter1_csrf},
         )
         assert res_v1.status_code == 200
@@ -226,15 +226,16 @@ async def test_thread_and_comment_voting_lifecycle():
         assert data1["reputation_delta"] == 5
 
         # Check target author's reputation
+        client.cookies.clear()
         res_rep = await client.get(f"/users/{author_id}/reputation")
         assert res_rep.status_code == 200
         assert res_rep.json()["reputation_score"] == 5
 
         # 3. Voter 2 downvotes thread (-1)
+        client.cookies.set("forum_session", voter2_sess)
         res_v2 = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": -1},
-            cookies={"forum_session": voter2_sess},
             headers={"X-CSRF-Token": voter2_csrf},
         )
         assert res_v2.status_code == 200
@@ -243,14 +244,15 @@ async def test_thread_and_comment_voting_lifecycle():
         assert data2["my_vote"] == -1
 
         # Check reputation after downvote (+5 - 5 = 0)
+        client.cookies.clear()
         res_rep2 = await client.get(f"/users/{author_id}/reputation")
         assert res_rep2.json()["reputation_score"] == 0
 
         # 4. Voter 1 toggles off their vote (submits +1 again)
+        client.cookies.set("forum_session", voter1_sess)
         res_toggle = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": 1},
-            cookies={"forum_session": voter1_sess},
             headers={"X-CSRF-Token": voter1_csrf},
         )
         assert res_toggle.status_code == 200
@@ -259,10 +261,10 @@ async def test_thread_and_comment_voting_lifecycle():
         assert data_toggle["score"] == -1
 
         # 5. Voter 2 replaces downvote (-1) with upvote (+1)
+        client.cookies.set("forum_session", voter2_sess)
         res_replace = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": 1},
-            cookies={"forum_session": voter2_sess},
             headers={"X-CSRF-Token": voter2_csrf},
         )
         assert res_replace.status_code == 200
@@ -272,10 +274,10 @@ async def test_thread_and_comment_voting_lifecycle():
         assert data_rep["reputation_delta"] == 10
 
         # 6. Comment voting
+        client.cookies.set("forum_session", voter1_sess)
         res_cvote = await client.put(
             f"/comments/{comment_id}/vote",
             json={"value": 1},
-            cookies={"forum_session": voter1_sess},
             headers={"X-CSRF-Token": voter1_csrf},
         )
         assert res_cvote.status_code == 200
@@ -288,7 +290,6 @@ async def test_thread_and_comment_voting_lifecycle():
         res_val = await client.put(
             f"/threads/{thread_id}/vote",
             json={"value": 2},
-            cookies={"forum_session": voter1_sess},
             headers={"X-CSRF-Token": voter1_csrf},
         )
         assert res_val.status_code == 422
@@ -332,9 +333,9 @@ async def test_bookmark_lifecycle_and_user_isolation():
     transport = ASGITransport(app=interaction_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. User 1 bookmarks Thread 1
+        client.cookies.set("forum_session", user1_sess)
         res_bm1 = await client.put(
             f"/threads/{thread1_id}/bookmark",
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_bm1.status_code == 200
@@ -343,7 +344,6 @@ async def test_bookmark_lifecycle_and_user_isolation():
         # 2. Repeated bookmark is idempotent (200 OK)
         res_bm1_dup = await client.put(
             f"/threads/{thread1_id}/bookmark",
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_bm1_dup.status_code == 200
@@ -351,15 +351,11 @@ async def test_bookmark_lifecycle_and_user_isolation():
         # User 1 bookmarks Thread 2
         await client.put(
             f"/threads/{thread2_id}/bookmark",
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
 
         # 3. User 1 lists own bookmarks
-        res_list1 = await client.get(
-            "/profile/bookmarks",
-            cookies={"forum_session": user1_sess},
-        )
+        res_list1 = await client.get("/profile/bookmarks")
         assert res_list1.status_code == 200
         items1 = res_list1.json()["items"]
         assert len(items1) == 2
@@ -367,17 +363,15 @@ async def test_bookmark_lifecycle_and_user_isolation():
         assert any(b["id"] == str(thread2_id) for b in items1)
 
         # 4. User 2 lists own bookmarks (empty, isolation verified)
-        res_list2 = await client.get(
-            "/profile/bookmarks",
-            cookies={"forum_session": user2_sess},
-        )
+        client.cookies.set("forum_session", user2_sess)
+        res_list2 = await client.get("/profile/bookmarks")
         assert res_list2.status_code == 200
         assert len(res_list2.json()["items"]) == 0
 
         # 5. User 1 removes bookmark on Thread 1 (204 No Content)
+        client.cookies.set("forum_session", user1_sess)
         res_del = await client.delete(
             f"/threads/{thread1_id}/bookmark",
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_del.status_code == 204
@@ -385,16 +379,12 @@ async def test_bookmark_lifecycle_and_user_isolation():
         # 6. Repeated delete is idempotent (204 No Content)
         res_del_dup = await client.delete(
             f"/threads/{thread1_id}/bookmark",
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_del_dup.status_code == 204
 
         # Verify only Thread 2 remains in User 1 bookmarks
-        res_list_after = await client.get(
-            "/profile/bookmarks",
-            cookies={"forum_session": user1_sess},
-        )
+        res_list_after = await client.get("/profile/bookmarks")
         assert len(res_list_after.json()["items"]) == 1
         assert res_list_after.json()["items"][0]["id"] == str(thread2_id)
 
@@ -418,9 +408,9 @@ async def test_view_tracking_and_deduplication():
     transport = ASGITransport(app=interaction_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. First view
+        client.cookies.set("forum_session", session_token)
         res_v1 = await client.post(
             f"/threads/{thread_id}/view",
-            cookies={"forum_session": session_token},
         )
         assert res_v1.status_code == 204
 
@@ -439,7 +429,6 @@ async def test_view_tracking_and_deduplication():
         # 2. Second view immediately after (inside 30-minute window) -> Deduplicated!
         res_v2 = await client.post(
             f"/threads/{thread_id}/view",
-            cookies={"forum_session": session_token},
         )
         assert res_v2.status_code == 204
 
@@ -457,7 +446,6 @@ async def test_view_tracking_and_deduplication():
         # 4. Third view after window expiration -> New view count increment event emitted!
         res_v3 = await client.post(
             f"/threads/{thread_id}/view",
-            cookies={"forum_session": session_token},
         )
         assert res_v3.status_code == 204
 
@@ -535,15 +523,16 @@ async def test_gateway_interaction_routing_and_spoof_prevention():
         transport = ASGITransport(app=gateway_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. Gateway PUT /api/v1/threads/{id}/bookmark with session cookie and CSRF
+            client.cookies.set("forum_session", session_token)
             res_bm = await client.put(
                 f"/api/v1/threads/{thread_id}/bookmark",
-                cookies={"forum_session": session_token},
                 headers={"X-CSRF-Token": csrf_token},
             )
             assert res_bm.status_code == 200
             assert res_bm.json()["bookmarked"] is True
 
             # 2. Unauthenticated request to /api/v1/profile/bookmarks -> 401
+            client.cookies.clear()
             res_unauth = await client.get("/api/v1/profile/bookmarks")
             assert res_unauth.status_code == 401
 

@@ -11,14 +11,14 @@ from src.services.user.config import UserSettings
 
 def test_base_service_settings_url_transformation(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/forum_users")
-    settings = BaseServiceSettings()
+    settings = BaseServiceSettings(database_url="postgresql://user:pass@localhost:5432/forum_users")
     assert str(settings.database_url).startswith("postgresql+asyncpg://")
 
 
 def test_base_service_settings_invalid_scheme(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", "mysql://user:pass@localhost:3306/db")
     with pytest.raises(ValidationError):
-        BaseServiceSettings()
+        BaseServiceSettings(database_url="mysql://user:pass@localhost:3306/db")
 
 
 def test_user_settings_defaults(monkeypatch: pytest.MonkeyPatch):

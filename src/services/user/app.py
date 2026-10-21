@@ -17,7 +17,9 @@ from src.common.errors import (
     register_canonical_error_handlers,
 )
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
 from src.common.models import ensure_utc
+from src.common.outbox_worker import OutboxWorker
 from src.common.rate_limit import SlidingWindowRateLimiter, get_client_ip
 from src.services.user.auth import (
     AuthenticatedContext,
@@ -27,7 +29,7 @@ from src.services.user.auth import (
 )
 from src.services.user.config import user_settings
 from src.services.user.database import user_db
-from src.services.user.models import Account, PendingRegistration, Session
+from src.services.user.models import Account, PendingRegistration, Session, UserOutboxEvent
 from src.services.user.otp_delivery import (
     EmailDeliveryError,
     deliver_otp,
@@ -60,11 +62,24 @@ from src.services.user.security import (
 
 logger = logging.getLogger(__name__)
 configure_logging(user_settings.service_name, user_settings.log_level)
+metrics_registry = MetricsRegistry(user_settings.service_name)
+
+
+outbox_worker = OutboxWorker(
+    service_name="user-service",
+    db_manager=user_db,
+    model_class=UserOutboxEvent,
+    service_urls=user_settings.get_service_urls(),
+    internal_key=user_settings.internal_service_secret,
+    poll_interval_seconds=1.0,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await outbox_worker.start()
     yield
+    await outbox_worker.stop()
     await user_db.close()
 
 
@@ -75,6 +90,7 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(app, metrics_registry, db_manager=user_db, outbox_worker=outbox_worker)
 
 # Abuse controls: sliding window rate limiters (Task 007)
 rate_limiter_register = SlidingWindowRateLimiter(
@@ -356,6 +372,22 @@ async def verify_registration(req: VerifyOtpRequest, request: Request) -> JSONRe
         )
         db_session.add(new_account)
         pending.status = "consumed"
+
+        outbox = UserOutboxEvent(
+            id=uuid.uuid4(),
+            event_type="UserRegistered",
+            aggregate_type="User",
+            aggregate_id=new_account.id,
+            payload={
+                "user_id": str(new_account.id),
+                "username": new_account.username,
+                "email": new_account.email,
+                "role": new_account.role,
+                "created_at": now.isoformat(),
+            },
+        )
+        db_session.add(outbox)
+
         try:
             await db_session.flush()
         except IntegrityError:
@@ -514,7 +546,7 @@ async def login(req: LoginRequest, response: Response, request: Request) -> JSON
         db_session.add(session_record)
 
     # Set-Cookie forum_session (ADR-003)
-    cookie_secure = user_settings.environment == "production"
+    cookie_secure = user_settings.is_cookie_secure()
     response.set_cookie(
         key=user_settings.session_cookie_name,
         value=session_token,
@@ -561,7 +593,7 @@ async def logout(
             current_s.revocation_reason = "user_logout"
 
     # Delete cookie
-    cookie_secure = user_settings.environment == "production"
+    cookie_secure = user_settings.is_cookie_secure()
     response.delete_cookie(
         key=user_settings.session_cookie_name,
         path="/",
@@ -745,14 +777,14 @@ async def admin_list_users(
 @app.patch(
     "/admin/users/{user_id}/role",
     tags=["Admin Users"],
-    dependencies=[Depends(require_role("admin", "moderator")), Depends(verify_csrf_header)],
+    dependencies=[Depends(require_role("admin")), Depends(verify_csrf_header)],
 )
 async def admin_change_user_role(
     user_id: uuid.UUID,
     req: ChangeUserRoleRequest,
     request: Request,
 ) -> JSONResponse:
-    """Modify user role (Admin/Moderator)."""
+    """Modify user role (Admin only)."""
     async with user_db.transaction() as db_session:
         query = select(Account).where(Account.id == user_id)
         account = (await db_session.execute(query)).scalar_one_or_none()

@@ -72,8 +72,10 @@ async def get_current_user(request: Request) -> ContentUser:
     try:
         resp = await client.get(
             url,
-            cookies={cookie_name: session_token},
-            headers={"X-Request-ID": request.headers.get("X-Request-ID", str(uuid.uuid4()))},
+            headers={
+                "Cookie": f"{cookie_name}={session_token}",
+                "X-Request-ID": request.headers.get("X-Request-ID", str(uuid.uuid4())),
+            },
         )
     except Exception as exc:
         raise HTTPException(

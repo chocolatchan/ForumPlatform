@@ -79,9 +79,12 @@ def _send_smtp_email_sync(
     port: int,
     user: str = "",
     password: str = "",
+    use_tls: bool = False,
+    starttls: bool = False,
 ) -> None:
     """Synchronous SMTP email sending execution run inside an async executor.
 
+    Supports plain SMTP, direct SSL/TLS, and STARTTLS.
     Strictly avoids logging plaintext code or message body.
     """
     msg = EmailMessage()
@@ -91,13 +94,22 @@ def _send_smtp_email_sync(
     msg.set_content(body)
 
     try:
-        with smtplib.SMTP(host=host, port=port, timeout=10) as client:
-            if user and password:
-                client.login(user, password)
-            refused = client.send_message(msg)
-            if refused:
-                # One or more recipients were refused by the server (e.g. 550)
-                raise smtplib.SMTPRecipientsRefused(refused)
+        if use_tls:
+            with smtplib.SMTP_SSL(host=host, port=port, timeout=10) as client:
+                if user and password:
+                    client.login(user, password)
+                refused = client.send_message(msg)
+                if refused:
+                    raise smtplib.SMTPRecipientsRefused(refused)
+        else:
+            with smtplib.SMTP(host=host, port=port, timeout=10) as client:
+                if starttls:
+                    client.starttls()
+                if user and password:
+                    client.login(user, password)
+                refused = client.send_message(msg)
+                if refused:
+                    raise smtplib.SMTPRecipientsRefused(refused)
     except smtplib.SMTPRecipientsRefused as e:
         logger.warning(
             "SMTP recipient refused by mail server: recipient=%s",
@@ -152,12 +164,11 @@ async def deliver_otp(
     recipient_clean = recipient.strip().lower()
 
     # Pre-flight check: Developer recipient allowlist (fail-closed)
-    allowed_recipients = user_settings.get_allowed_recipients()
-    if recipient_clean not in allowed_recipients:
+    if not user_settings.is_recipient_allowed(recipient_clean):
         logger.warning(
             "Email delivery rejected by allowlist: recipient=%s (allowed count=%d)",
             recipient_clean,
-            len(allowed_recipients),
+            len(user_settings.get_allowed_recipients()),
         )
         raise EmailDeliveryError(
             f"Recipient '{recipient_clean}' is not in the configured development email allowlist.",
@@ -195,6 +206,8 @@ async def deliver_otp(
         port=user_settings.smtp_port,
         user=user_settings.smtp_user,
         password=user_settings.smtp_password,
+        use_tls=user_settings.smtp_use_tls,
+        starttls=user_settings.smtp_starttls,
     )
 
     # Also record to sink for inspection if needed

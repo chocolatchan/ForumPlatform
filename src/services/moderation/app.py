@@ -16,6 +16,8 @@ from src.common.errors import (
     register_canonical_error_handlers,
 )
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
+from src.common.outbox_worker import OutboxWorker
 from src.services.moderation.auth import (
     ModerationUser,
     get_current_user,
@@ -32,11 +34,23 @@ from src.services.moderation.schemas import (
 )
 
 configure_logging(moderation_settings.service_name, moderation_settings.log_level)
+metrics_registry = MetricsRegistry(moderation_settings.service_name)
+
+outbox_worker = OutboxWorker(
+    service_name="moderation-service",
+    db_manager=moderation_db,
+    model_class=ModerationOutboxEvent,
+    service_urls=moderation_settings.get_service_urls(),
+    internal_key=moderation_settings.internal_service_secret,
+    poll_interval_seconds=1.0,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await outbox_worker.start()
     yield
+    await outbox_worker.stop()
     await moderation_db.close()
 
 
@@ -47,6 +61,7 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(app, metrics_registry, db_manager=moderation_db, outbox_worker=outbox_worker)
 
 
 # Inter-service HTTP clients for remote content and user mutations (DEC-002)

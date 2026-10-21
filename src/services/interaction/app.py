@@ -18,6 +18,8 @@ from src.common.errors import (
     register_canonical_error_handlers,
 )
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
+from src.common.outbox_worker import OutboxWorker
 from src.common.rate_limit import get_client_ip
 from src.services.interaction.auth import (
     InteractionUser,
@@ -38,11 +40,23 @@ from src.services.interaction.schemas import (
 )
 
 configure_logging(interaction_settings.service_name, interaction_settings.log_level)
+metrics_registry = MetricsRegistry(interaction_settings.service_name)
+
+outbox_worker = OutboxWorker(
+    service_name="interaction-service",
+    db_manager=interaction_db,
+    model_class=InteractionOutboxEvent,
+    service_urls=interaction_settings.get_service_urls(),
+    internal_key=interaction_settings.internal_service_secret,
+    poll_interval_seconds=1.0,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await outbox_worker.start()
     yield
+    await outbox_worker.stop()
     await interaction_db.close()
 
 
@@ -53,6 +67,9 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(
+    app, metrics_registry, db_manager=interaction_db, outbox_worker=outbox_worker
+)
 
 
 # Inter-service HTTP client hook for dependency injection / mocking in tests
@@ -148,7 +165,7 @@ async def vote_thread(
     """Vote or change/toggle vote on a thread."""
     if req.value not in (-1, 1):
         return error_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             code="VALIDATION_ERROR",
             message="Vote value must be 1 or -1",
             details=[{"field": "value", "reason": "Input should be 1 or -1"}],
@@ -319,7 +336,7 @@ async def vote_comment(
     """Vote or change/toggle vote on a comment."""
     if req.value not in (-1, 1):
         return error_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             code="VALIDATION_ERROR",
             message="Vote value must be 1 or -1",
             details=[{"field": "value", "reason": "Input should be 1 or -1"}],

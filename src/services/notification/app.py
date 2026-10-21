@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from src.common.errors import error_response, register_canonical_error_handlers
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
 from src.services.notification.auth import (
     NotificationUser,
     get_current_user,
@@ -29,6 +30,7 @@ from src.services.notification.schemas import (
 )
 
 configure_logging(notification_settings.service_name, notification_settings.log_level)
+metrics_registry = MetricsRegistry(notification_settings.service_name)
 
 DEFAULT_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -46,6 +48,7 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(app, metrics_registry, db_manager=notification_db)
 
 
 def encode_cursor(dt: datetime, item_id: uuid.UUID) -> str:

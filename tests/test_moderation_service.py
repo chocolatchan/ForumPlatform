@@ -205,10 +205,10 @@ async def test_report_creation_validation_and_deduplication():
     transport = ASGITransport(app=moderation_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Self-reporting own account rejected (400 SELF_REPORT_NOT_ALLOWED)
+        client.cookies.set("forum_session", user1_sess)
         res_self = await client.post(
             "/reports",
             json={"target_type": "account", "target_id": str(user1_id), "reason": "harassment"},
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_self.status_code == 400
@@ -219,7 +219,6 @@ async def test_report_creation_validation_and_deduplication():
         res_missing = await client.post(
             "/reports",
             json={"target_type": "thread", "target_id": str(missing_thread), "reason": "spam"},
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_missing.status_code == 404
@@ -234,7 +233,6 @@ async def test_report_creation_validation_and_deduplication():
                 "reason": "spam",
                 "details": "Repeated casino spam links.",
             },
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_rep1.status_code == 201
@@ -255,7 +253,6 @@ async def test_report_creation_validation_and_deduplication():
                 "reason": "spam",
                 "details": "Submitting again.",
             },
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_dup.status_code == 409
@@ -265,7 +262,6 @@ async def test_report_creation_validation_and_deduplication():
         res_com = await client.post(
             "/reports",
             json={"target_type": "comment", "target_id": str(comment_id), "reason": "abuse"},
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_com.status_code == 201
@@ -277,13 +273,12 @@ async def test_report_creation_validation_and_deduplication():
                 "target_id": str(target_author_id),
                 "reason": "harassment",
             },
-            cookies={"forum_session": user1_sess},
             headers={"X-CSRF-Token": user1_csrf},
         )
         assert res_acc.status_code == 201
 
         # 6. Own reports retrieval (GET /reports/mine)
-        res_mine = await client.get("/reports/mine", cookies={"forum_session": user1_sess})
+        res_mine = await client.get("/reports/mine")
         assert res_mine.status_code == 200
         mine_items = res_mine.json()["items"]
         assert len(mine_items) == 3
@@ -316,30 +311,25 @@ async def test_moderation_queue_and_lifecycle_transitions():
     transport = ASGITransport(app=moderation_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Member cannot access moderation queue (403 Forbidden)
-        res_forbidden = await client.get(
-            "/moderation/reports", cookies={"forum_session": member_sess}
-        )
+        client.cookies.set("forum_session", member_sess)
+        res_forbidden = await client.get("/moderation/reports")
         assert res_forbidden.status_code == 403
 
         # 2. Moderator lists queue (GET /moderation/reports?status=pending)
-        res_queue = await client.get(
-            "/moderation/reports?status=pending", cookies={"forum_session": mod_sess}
-        )
+        client.cookies.set("forum_session", mod_sess)
+        res_queue = await client.get("/moderation/reports?status=pending")
         assert res_queue.status_code == 200
         items = res_queue.json()["items"]
         assert any(r["id"] == str(rep_id) for r in items)
 
         # 3. Moderator retrieves detailed report (GET /moderation/reports/{id})
-        res_detail = await client.get(
-            f"/moderation/reports/{rep_id}", cookies={"forum_session": mod_sess}
-        )
+        res_detail = await client.get(f"/moderation/reports/{rep_id}")
         assert res_detail.status_code == 200
         assert res_detail.json()["status"] == "pending"
 
         # 4. Moderator claims report (PATCH /moderation/reports/{id}/review) -> moves to 'reviewing'
         res_claim = await client.patch(
             f"/moderation/reports/{rep_id}/review",
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_claim.status_code == 200
@@ -348,7 +338,6 @@ async def test_moderation_queue_and_lifecycle_transitions():
         # 5. Invalid transition: cannot re-claim report already in 'reviewing' (409 Conflict)
         res_reclaim = await client.patch(
             f"/moderation/reports/{rep_id}/review",
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_reclaim.status_code == 409
@@ -358,16 +347,13 @@ async def test_moderation_queue_and_lifecycle_transitions():
         res_dismiss = await client.post(
             f"/moderation/reports/{rep_id}/actions",
             json={"action": "dismiss_report", "reason": "Not a violation of community guidelines."},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_dismiss.status_code == 200
         assert res_dismiss.json()["action"] == "dismiss_report"
 
         # Verify status is now 'dismissed'
-        res_check = await client.get(
-            f"/moderation/reports/{rep_id}", cookies={"forum_session": mod_sess}
-        )
+        res_check = await client.get(f"/moderation/reports/{rep_id}")
         assert res_check.json()["status"] == "dismissed"
         assert res_check.json()["resolution_note"] == "Not a violation of community guidelines."
 
@@ -375,7 +361,6 @@ async def test_moderation_queue_and_lifecycle_transitions():
         res_reopen = await client.post(
             f"/moderation/reports/{rep_id}/actions",
             json={"action": "lock", "reason": "Trying to act on dismissed report."},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_reopen.status_code == 409
@@ -445,10 +430,10 @@ async def test_moderation_enforcement_actions_and_audit():
     transport = ASGITransport(app=moderation_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Action thread report: lock thread
+        client.cookies.set("forum_session", mod_sess)
         res_act1 = await client.post(
             f"/moderation/reports/{report_thread_id}/actions",
             json={"action": "lock", "reason": "Locking thread due to flame war."},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_act1.status_code == 200
@@ -468,7 +453,6 @@ async def test_moderation_enforcement_actions_and_audit():
         res_act2 = await client.post(
             f"/moderation/reports/{report_account_id}/actions",
             json={"action": "ban", "reason": "Confirmed spam bot."},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_act2.status_code == 200
@@ -488,7 +472,6 @@ async def test_moderation_enforcement_actions_and_audit():
                 "target_id": str(proactive_thread),
                 "reason": "Illegal content removed proactively by moderator.",
             },
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_proactive.status_code == 200
@@ -506,14 +489,13 @@ async def test_moderation_enforcement_actions_and_audit():
                 "target_id": str(fail_thread),
                 "reason": "Delete attempt that will fail remotely.",
             },
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_fail.status_code == 400
         assert res_fail.json()["error"]["code"] == "ACTION_FAILED"
 
         # 5. Verify audit log (GET /moderation/actions)
-        res_audit = await client.get("/moderation/actions", cookies={"forum_session": mod_sess})
+        res_audit = await client.get("/moderation/actions")
         assert res_audit.status_code == 200
         audit_items = res_audit.json()["items"]
         assert len(audit_items) >= 4  # lock, ban, proactive soft_delete, and failed soft_delete
@@ -567,9 +549,9 @@ async def test_gateway_moderation_routing_and_spoof_prevention():
     with patch.object(gateway_app_mod, "http_client", mock_client):
         transport = ASGITransport(app=gateway_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            client.cookies.set("forum_session", mod_sess)
             res = await client.get(
                 "/api/v1/moderation/reports",
-                cookies={"forum_session": mod_sess},
                 headers={
                     "X-User-ID": str(uuid.uuid4()),
                     "X-Role": "admin",

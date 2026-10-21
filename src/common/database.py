@@ -162,3 +162,15 @@ class DatabaseSessionManager:
         except Exception as e:
             logger.warning("Database ping failed: %s", e)
             return False
+
+    def get_pool_status(self) -> dict[str, int]:
+        """Return current database connection pool utilization metrics."""
+        if self._engine is None:
+            return {"size": 0, "checked_in": 0, "checked_out": 0, "overflow": 0}
+        pool = self._engine.sync_engine.pool
+        return {
+            "size": getattr(pool, "size", lambda: 0)(),
+            "checked_in": getattr(pool, "checkedin", lambda: 0)(),
+            "checked_out": getattr(pool, "checkedout", lambda: 0)(),
+            "overflow": getattr(pool, "overflow", lambda: 0)(),
+        }

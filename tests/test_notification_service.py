@@ -185,22 +185,26 @@ async def test_notification_inbox_and_lifecycle():
         session.add(user2_item)
 
     transport = ASGITransport(app=notification_app)
-    cookies_user1 = {"forum_session": session1}
-    cookies_user2 = {"forum_session": session2}
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with (
+        AsyncClient(transport=transport, base_url="http://test") as client_u1,
+        AsyncClient(transport=transport, base_url="http://test") as client_u2,
+    ):
+        client_u1.cookies.set("forum_session", session1)
+        client_u2.cookies.set("forum_session", session2)
+
         # 2. Check unread count for user 1 -> should be 3
-        res = await client.get("/notifications/unread-count", cookies=cookies_user1)
+        res = await client_u1.get("/notifications/unread-count")
         assert res.status_code == 200
         assert res.json()["unread_count"] == 3
 
         # Check unread count for user 2 -> should be 1
-        res = await client.get("/notifications/unread-count", cookies=cookies_user2)
+        res = await client_u2.get("/notifications/unread-count")
         assert res.status_code == 200
         assert res.json()["unread_count"] == 1
 
         # 3. List notifications with pagination limit=2 for user 1
-        res = await client.get("/notifications?limit=2", cookies=cookies_user1)
+        res = await client_u1.get("/notifications?limit=2")
         assert res.status_code == 200
         data = res.json()
         assert len(data["items"]) == 2
@@ -211,9 +215,8 @@ async def test_notification_inbox_and_lifecycle():
         first_item_id = data["items"][0]["id"]
 
         # Fetch second page
-        res_page2 = await client.get(
+        res_page2 = await client_u1.get(
             f"/notifications?limit=2&cursor={data['next_cursor']}",
-            cookies=cookies_user1,
         )
         assert res_page2.status_code == 200
         data_page2 = res_page2.json()
@@ -222,38 +225,36 @@ async def test_notification_inbox_and_lifecycle():
         assert data_page2["next_cursor"] is None
 
         # 4. User 1 can view detail of their own notification
-        res_detail = await client.get(f"/notifications/{first_item_id}", cookies=cookies_user1)
+        res_detail = await client_u1.get(f"/notifications/{first_item_id}")
         assert res_detail.status_code == 200
         assert res_detail.json()["id"] == first_item_id
 
         # 5. User 2 attempting to view User 1's notification returns 404 (isolation)
-        res_forbidden = await client.get(f"/notifications/{first_item_id}", cookies=cookies_user2)
+        res_forbidden = await client_u2.get(f"/notifications/{first_item_id}")
         assert res_forbidden.status_code == 404
 
         # 6. Mark single notification read (PATCH /notifications/{id}/read) with CSRF
-        res_read = await client.patch(
+        res_read = await client_u1.patch(
             f"/notifications/{first_item_id}/read",
-            cookies=cookies_user1,
             headers={"X-CSRF-Token": csrf1},
         )
         assert res_read.status_code == 200
         assert res_read.json()["is_read"] is True
 
         # Unread count should now be 2
-        res = await client.get("/notifications/unread-count", cookies=cookies_user1)
+        res = await client_u1.get("/notifications/unread-count")
         assert res.json()["unread_count"] == 2
 
         # Repeated read request is idempotent
-        res_read_repeat = await client.patch(
+        res_read_repeat = await client_u1.patch(
             f"/notifications/{first_item_id}/read",
-            cookies=cookies_user1,
             headers={"X-CSRF-Token": csrf1},
         )
         assert res_read_repeat.status_code == 200
         assert res_read_repeat.json()["is_read"] is True
 
         # 7. Filter by unread_only=true -> returns 2 remaining unread notifications
-        res_unread = await client.get("/notifications?unread_only=true", cookies=cookies_user1)
+        res_unread = await client_u1.get("/notifications?unread_only=true")
         assert res_unread.status_code == 200
         assert len(res_unread.json()["items"]) == 2
         unread_titles = [i["title"] for i in res_unread.json()["items"]]
@@ -262,19 +263,18 @@ async def test_notification_inbox_and_lifecycle():
         assert "Notification 1" in unread_titles
 
         # 8. Mark all read (POST /notifications/read-all) with CSRF
-        res_read_all = await client.post(
+        res_read_all = await client_u1.post(
             "/notifications/read-all",
-            cookies=cookies_user1,
             headers={"X-CSRF-Token": csrf1},
         )
         assert res_read_all.status_code == 204
 
         # Unread count should now be 0
-        res = await client.get("/notifications/unread-count", cookies=cookies_user1)
+        res = await client_u1.get("/notifications/unread-count")
         assert res.json()["unread_count"] == 0
 
         # Unread items query returns empty list
-        res_empty = await client.get("/notifications?unread_only=true", cookies=cookies_user1)
+        res_empty = await client_u1.get("/notifications?unread_only=true")
         assert res_empty.status_code == 200
         assert len(res_empty.json()["items"]) == 0
 
@@ -285,18 +285,17 @@ async def test_notification_preferences_management():
     user_id, session_token, csrf_token = await create_test_user_and_session("pref_user")
 
     transport = ASGITransport(app=notification_app)
-    cookies = {"forum_session": session_token}
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("forum_session", session_token)
         # 1. Default preferences should be in_app_enabled=True, email_enabled=False
-        res = await client.get("/notifications/preferences", cookies=cookies)
+        res = await client.get("/notifications/preferences")
         assert res.status_code == 200
         assert res.json() == {"in_app_enabled": True, "email_enabled": False}
 
         # 2. Update preferences: disable in-app and enable email
         res_up = await client.patch(
             "/notifications/preferences",
-            cookies=cookies,
             headers={"X-CSRF-Token": csrf_token},
             json={"in_app_enabled": False, "email_enabled": True},
         )
@@ -304,7 +303,7 @@ async def test_notification_preferences_management():
         assert res_up.json() == {"in_app_enabled": False, "email_enabled": True}
 
         # 3. Read again to verify persistence
-        res2 = await client.get("/notifications/preferences", cookies=cookies)
+        res2 = await client.get("/notifications/preferences")
         assert res2.status_code == 200
         assert res2.json() == {"in_app_enabled": False, "email_enabled": True}
 
@@ -316,9 +315,9 @@ async def test_event_processing_and_idempotency():
     actor_id, _, _ = await create_test_user_and_session("event_user_actor")
 
     transport = ASGITransport(app=notification_app)
-    cookies = {"forum_session": session_token}
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("forum_session", session_token)
         # Event 1: CommentCreated
         event_id = uuid.uuid4()
         event_payload = {
@@ -339,7 +338,7 @@ async def test_event_processing_and_idempotency():
         assert res.json()["notifications_created"] == 1
 
         # Check notification inbox
-        inbox_res = await client.get("/notifications", cookies=cookies)
+        inbox_res = await client.get("/notifications")
         assert inbox_res.status_code == 200
         assert len(inbox_res.json()["items"]) == 1
         notif = inbox_res.json()["items"][0]
@@ -352,7 +351,7 @@ async def test_event_processing_and_idempotency():
         assert res_dup.json()["notifications_created"] == 0
 
         # Inbox still contains only 1 notification
-        inbox_res2 = await client.get("/notifications", cookies=cookies)
+        inbox_res2 = await client.get("/notifications")
         assert len(inbox_res2.json()["items"]) == 1
 
         # Event 2: Self-notification exclusion on CommentCreated
@@ -402,7 +401,7 @@ async def test_event_processing_and_idempotency():
         assert res_mod.json()["notifications_created"] == 1
 
         # Check total notifications for user_id -> 3 items
-        inbox_all = await client.get("/notifications", cookies=cookies)
+        inbox_all = await client.get("/notifications")
         assert len(inbox_all.json()["items"]) == 3
 
         # Event 5: Preference Disabled Suppression
@@ -456,14 +455,15 @@ async def test_gateway_notification_routing_and_spoof_prevention():
             assert res_unauth.status_code == 401
 
             # 2. Authenticated request with session cookie
+            client.cookies.set("forum_session", session_token)
             res_auth = await client.get(
                 "/api/v1/notifications",
-                cookies={"forum_session": session_token},
             )
             assert res_auth.status_code == 200
             assert "items" in res_auth.json()
 
             # 3. Spoofed identity headers stripped by Gateway
+            client.cookies.clear()
             fake_user_id = str(uuid.uuid4())
             res_spoofed = await client.get(
                 "/api/v1/notifications",

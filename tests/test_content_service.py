@@ -177,15 +177,16 @@ async def test_category_crud_and_permissions():
     transport = ASGITransport(app=content_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Non-admin cannot create category (403)
+        client.cookies.set("forum_session", member_session)
         res_fail = await client.post(
             "/admin/categories",
             json={"name": "Forbidden Category", "slug": "forbidden-cat"},
-            cookies={"forum_session": member_session},
             headers={"X-CSRF-Token": member_csrf},
         )
         assert res_fail.status_code == 403
 
         # Admin creates category (201)
+        client.cookies.set("forum_session", admin_session)
         res_create = await client.post(
             "/admin/categories",
             json={
@@ -194,7 +195,6 @@ async def test_category_crud_and_permissions():
                 "description": "All things Python",
                 "sort_order": 1,
             },
-            cookies={"forum_session": admin_session},
             headers={"X-CSRF-Token": admin_csrf},
         )
         assert res_create.status_code == 201
@@ -207,13 +207,13 @@ async def test_category_crud_and_permissions():
         res_dup = await client.post(
             "/admin/categories",
             json={"name": "Python Dev 2", "slug": "python-dev"},
-            cookies={"forum_session": admin_session},
             headers={"X-CSRF-Token": admin_csrf},
         )
         assert res_dup.status_code == 409
         assert res_dup.json()["error"]["code"] == "CATEGORY_SLUG_CONFLICT"
 
         # Public get category
+        client.cookies.clear()
         res_get = await client.get(f"/categories/{cat_id}")
         assert res_get.status_code == 200
         assert res_get.json()["slug"] == "python-dev"
@@ -224,10 +224,10 @@ async def test_category_crud_and_permissions():
         assert any(c["id"] == cat_id for c in res_list.json()["items"])
 
         # Admin update category
+        client.cookies.set("forum_session", admin_session)
         res_upd = await client.patch(
             f"/admin/categories/{cat_id}",
             json={"name": "Python & Async Development", "description": "Updated"},
-            cookies={"forum_session": admin_session},
             headers={"X-CSRF-Token": admin_csrf},
         )
         assert res_upd.status_code == 200
@@ -277,6 +277,7 @@ async def test_thread_lifecycle_and_filters():
         assert res_unauth.status_code == 401
 
         # Create thread with tags (including duplicates and mixed casing)
+        client.cookies.set("forum_session", author_sess)
         res_create = await client.post(
             "/threads",
             json={
@@ -285,7 +286,6 @@ async def test_thread_lifecycle_and_filters():
                 "body": "We are experiencing connection pool exhaustion under heavy traffic loads.",
                 "tags": ["FastAPI", "Postgres", "fastapi", "pooling"],
             },
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_create.status_code == 201
@@ -300,6 +300,7 @@ async def test_thread_lifecycle_and_filters():
         assert "FastAPI" in thread["tags"]
 
         # Filter by category
+        client.cookies.clear()
         res_filter_cat = await client.get(f"/threads?category_id={cat_id}")
         assert res_filter_cat.status_code == 200
         assert any(t["id"] == thread_id for t in res_filter_cat.json()["items"])
@@ -315,15 +316,16 @@ async def test_thread_lifecycle_and_filters():
         assert not any(t["id"] == thread_id for t in res_no_match.json()["items"])
 
         # Non-author cannot edit (403)
+        client.cookies.set("forum_session", other_sess)
         res_edit_fail = await client.patch(
             f"/threads/{thread_id}",
             json={"title": "Hacked Title of the Thread!"},
-            cookies={"forum_session": other_sess},
             headers={"X-CSRF-Token": other_csrf},
         )
         assert res_edit_fail.status_code == 403
 
         # Author can edit (200)
+        client.cookies.set("forum_session", author_sess)
         res_edit_ok = await client.patch(
             f"/threads/{thread_id}",
             json={
@@ -331,7 +333,6 @@ async def test_thread_lifecycle_and_filters():
                 "body": "Updated body content with plenty of details for twenty chars.",
                 "tags": ["FastAPI", "AsyncPG"],
             },
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_edit_ok.status_code == 200
@@ -340,10 +341,10 @@ async def test_thread_lifecycle_and_filters():
         assert len(edited["tags"]) == 2
 
         # Moderator can pin and lock thread
+        client.cookies.set("forum_session", mod_sess)
         res_pin = await client.put(
             f"/threads/{thread_id}/pin",
             json={"is_pinned": True},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_pin.status_code == 200
@@ -352,26 +353,25 @@ async def test_thread_lifecycle_and_filters():
         res_lock = await client.put(
             f"/threads/{thread_id}/lock",
             json={"is_locked": True},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_lock.status_code == 200
         assert res_lock.json()["is_locked"] is True
 
         # Ordinary member cannot lock or pin (403)
+        client.cookies.set("forum_session", author_sess)
         res_member_lock = await client.put(
             f"/threads/{thread_id}/lock",
             json={"is_locked": False},
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_member_lock.status_code == 403
 
         # Unlock thread for comment tests
+        client.cookies.set("forum_session", mod_sess)
         await client.put(
             f"/threads/{thread_id}/lock",
             json={"is_locked": False},
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
 
@@ -409,10 +409,10 @@ async def test_comments_hierarchy_and_adr008():
             )
 
         # 1. Top-level comment (Depth 1)
+        client.cookies.set("forum_session", author_sess)
         res_c1 = await client.post(
             f"/threads/{thread_id}/comments",
             json={"body": "Top level comment: Outbox pattern is essential for reliable events."},
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_c1.status_code == 201
@@ -421,13 +421,13 @@ async def test_comments_hierarchy_and_adr008():
         assert c1["parent_comment_id"] is None
 
         # 2. Reply to top-level comment (Depth 2)
+        client.cookies.set("forum_session", replier_sess)
         res_c2 = await client.post(
             f"/threads/{thread_id}/comments",
             json={
                 "body": "Reply: Yes, transactional outbox prevents dual-write anomalies.",
                 "parent_comment_id": c1_id,
             },
-            cookies={"forum_session": replier_sess},
             headers={"X-CSRF-Token": replier_csrf},
         )
         assert res_c2.status_code == 201
@@ -436,13 +436,13 @@ async def test_comments_hierarchy_and_adr008():
         assert c2["parent_comment_id"] == c1_id
 
         # 3. Reply to reply (Depth > 2) -> Must be rejected (400 COMMENT_DEPTH_EXCEEDED)
+        client.cookies.set("forum_session", author_sess)
         res_c3 = await client.post(
             f"/threads/{thread_id}/comments",
             json={
                 "body": "Third level reply attempt.",
                 "parent_comment_id": c2_id,
             },
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_c3.status_code == 400
@@ -452,25 +452,24 @@ async def test_comments_hierarchy_and_adr008():
         res_ba = await client.put(
             f"/threads/{thread_id}/best-answer",
             json={"comment_id": c2_id},
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_ba.status_code == 200
         assert res_ba.json()["best_answer_comment_id"] == c2_id
 
         # Non-author cannot set best answer (403)
+        client.cookies.set("forum_session", replier_sess)
         res_ba_fail = await client.put(
             f"/threads/{thread_id}/best-answer",
             json={"comment_id": c1_id},
-            cookies={"forum_session": replier_sess},
             headers={"X-CSRF-Token": replier_csrf},
         )
         assert res_ba_fail.status_code == 403
 
         # 5. ADR-008: Author cannot delete thread because comments & best answer exist
+        client.cookies.set("forum_session", author_sess)
         res_del_conflict = await client.delete(
             f"/threads/{thread_id}",
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_del_conflict.status_code == 409
@@ -480,7 +479,6 @@ async def test_comments_hierarchy_and_adr008():
         res_edit_c = await client.patch(
             f"/comments/{c1_id}",
             json={"body": "Edited top level comment with improved clarity."},
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_edit_c.status_code == 200
@@ -489,12 +487,12 @@ async def test_comments_hierarchy_and_adr008():
         # 7. Author soft-deletes comment
         res_del_c = await client.delete(
             f"/comments/{c1_id}",
-            cookies={"forum_session": author_sess},
             headers={"X-CSRF-Token": author_csrf},
         )
         assert res_del_c.status_code == 204
 
         # Verify comment list shows '[deleted]' for soft-deleted comment
+        client.cookies.clear()
         res_clist = await client.get(f"/threads/{thread_id}/comments")
         assert res_clist.status_code == 200
         comments = res_clist.json()["items"]
@@ -503,14 +501,15 @@ async def test_comments_hierarchy_and_adr008():
         assert deleted_c["body"] == "[deleted]"
 
         # 8. Moderator deletes thread (permitted by policy)
+        client.cookies.set("forum_session", mod_sess)
         res_mod_del = await client.delete(
             f"/threads/{thread_id}",
-            cookies={"forum_session": mod_sess},
             headers={"X-CSRF-Token": mod_csrf},
         )
         assert res_mod_del.status_code == 204
 
         # Thread is now 404
+        client.cookies.clear()
         res_th_after = await client.get(f"/threads/{thread_id}")
         assert res_th_after.status_code == 404
 
@@ -584,6 +583,7 @@ async def test_gateway_content_forwarding_and_spoof_prevention():
             assert any(c["id"] == str(cat_id) for c in res_cats.json()["items"])
 
             # 2. Gateway POST /api/v1/threads with session cookie
+            client.cookies.set("forum_session", session_token)
             res_thread = await client.post(
                 "/api/v1/threads",
                 json={
@@ -592,14 +592,14 @@ async def test_gateway_content_forwarding_and_spoof_prevention():
                     "body": "Checking that session cookies are forwarded and validated by Content Service.",
                     "tags": ["gateway", "proxy"],
                 },
-                cookies={"forum_session": session_token},
                 headers={"X-CSRF-Token": csrf_token},
             )
             assert res_thread.status_code == 201
             th_data = res_thread.json()
             assert th_data["author_id"] == str(user_id)
 
-            # 3. Security: Attempt spoofing admin role via client headers
+            # 3. Security: Attempt spoofing admin role via client headers without session
+            client.cookies.clear()
             spoofed_admin_id = str(uuid.uuid4())
             res_spoof = await client.post(
                 "/api/v1/admin/categories",

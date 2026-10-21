@@ -1,6 +1,8 @@
 """Base configuration using Pydantic Settings."""
 
-from pydantic import Field, field_validator
+from typing import Self
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +36,24 @@ class BaseServiceSettings(BaseSettings):
         description="List of trusted reverse proxy IPs / hostnames for X-Forwarded-For parsing",
     )
 
+    # Inter-service base URLs
+    user_service_url: str = Field(default="http://localhost:8001")
+    content_service_url: str = Field(default="http://localhost:8002")
+    interaction_service_url: str = Field(default="http://localhost:8003")
+    moderation_service_url: str = Field(default="http://localhost:8004")
+    notification_service_url: str = Field(default="http://localhost:8005")
+    search_service_url: str = Field(default="http://localhost:8006")
+
+    def get_service_urls(self) -> dict[str, str]:
+        return {
+            "user-service": self.user_service_url,
+            "content-service": self.content_service_url,
+            "interaction-service": self.interaction_service_url,
+            "moderation-service": self.moderation_service_url,
+            "notification-service": self.notification_service_url,
+            "search-service": self.search_service_url,
+        }
+
     @field_validator("database_url")
     @classmethod
     def validate_async_pg_url(cls, v: str) -> str:
@@ -50,3 +70,42 @@ class BaseServiceSettings(BaseSettings):
                 f"Database URL must use postgresql+asyncpg or sqlite+aiosqlite driver. Received: {v.split('://')[0]}://"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_staging_production_secrets(self) -> Self:
+        """Enforce strict configuration rules for staging and production environments."""
+        if self.environment in ("staging", "production"):
+            # Check CSRF secret if present on settings instance first for backward compatibility
+            csrf_val = getattr(self, "csrf_secret", None)
+            if csrf_val is not None:
+                insecure_csrf_defaults = {
+                    "default-dev-csrf-secret",
+                    "replace-with-random-csrf-secret-key",
+                }
+                if not csrf_val or csrf_val in insecure_csrf_defaults or len(csrf_val) < 32:
+                    raise ValueError(
+                        f"{self.environment.capitalize()} requires a non-default, cryptographically secure CSRF_SECRET of at least 32 characters."
+                    )
+
+            insecure_key_defaults = {
+                "default-internal-service-secret-key-32chars",
+                "replace-with-a-secure-random-secret-key-min-32-chars",
+                "replace-with-random-csrf-secret-key",
+                "forum_dev_password",
+            }
+            if (
+                not self.internal_service_secret
+                or self.internal_service_secret in insecure_key_defaults
+            ):
+                raise ValueError(
+                    f"{self.environment.capitalize()} environment requires a non-default, secure INTERNAL_SERVICE_SECRET."
+                )
+            if len(self.internal_service_secret) < 32:
+                raise ValueError(
+                    f"{self.environment.capitalize()} INTERNAL_SERVICE_SECRET must be at least 32 characters long."
+                )
+            if "forum_dev_password" in self.database_url:
+                raise ValueError(
+                    f"{self.environment.capitalize()} DATABASE_URL must not contain default development password 'forum_dev_password'."
+                )
+        return self

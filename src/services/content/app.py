@@ -18,6 +18,8 @@ from src.common.errors import (
     register_canonical_error_handlers,
 )
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
+from src.common.outbox_worker import OutboxWorker
 from src.services.content.auth import (
     ContentUser,
     get_current_user,
@@ -30,6 +32,7 @@ from src.services.content.database import content_db
 from src.services.content.models import (
     Category,
     Comment,
+    ConsumedEvent,
     ContentOutboxEvent,
     Thread,
     ThreadTag,
@@ -47,11 +50,23 @@ from src.services.content.schemas import (
 )
 
 configure_logging(content_settings.service_name, content_settings.log_level)
+metrics_registry = MetricsRegistry(content_settings.service_name)
+
+outbox_worker = OutboxWorker(
+    service_name="content-service",
+    db_manager=content_db,
+    model_class=ContentOutboxEvent,
+    service_urls=content_settings.get_service_urls(),
+    internal_key=content_settings.internal_service_secret,
+    poll_interval_seconds=1.0,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await outbox_worker.start()
     yield
+    await outbox_worker.stop()
     await content_db.close()
 
 
@@ -62,6 +77,7 @@ app = FastAPI(
 )
 
 register_canonical_error_handlers(app)
+setup_metrics_endpoint(app, metrics_registry, db_manager=content_db, outbox_worker=outbox_worker)
 
 
 # --- Helpers ---
@@ -1006,22 +1022,57 @@ async def ingest_internal_event(
 ) -> JSONResponse:
     """Consume internal domain events such as ThreadViewCountIncremented (DEC-005)."""
     body = await request.json()
+    event_id_str = body.get("event_id")
     event_type = body.get("event_type")
     data = body.get("data", {})
 
     if event_type == "ThreadViewCountIncremented":
         thread_id_str = data.get("thread_id")
         increment = data.get("increment", 1)
-        if thread_id_str:
+        if thread_id_str and event_id_str:
+            event_id = uuid.UUID(event_id_str)
             thread_id = uuid.UUID(thread_id_str)
             async with content_db.transaction() as session:
+                # 1. Atomic Idempotency Guard
+                consumed_stmt = select(ConsumedEvent).where(ConsumedEvent.event_id == event_id)
+                existing = (await session.execute(consumed_stmt)).scalar_one_or_none()
+                if existing:
+                    return JSONResponse(
+                        status_code=status.HTTP_200_OK,
+                        content={
+                            "status": "processed",
+                            "thread_id": thread_id_str,
+                            "increment": 0,
+                            "duplicate": True,
+                        },
+                    )
+
+                # 2. Update view count
                 query = select(Thread).where(Thread.id == thread_id)
                 thread = (await session.execute(query)).scalar_one_or_none()
                 if thread:
                     thread.view_count += increment
+
+                # 3. Record consumption atomically
+                consumed = ConsumedEvent(
+                    id=uuid.uuid4(),
+                    event_id=event_id,
+                    event_type=event_type,
+                    status="processed",
+                    attempts=1,
+                    processed_at=datetime.now(UTC),
+                    metadata_={"thread_id": thread_id_str, "increment": increment},
+                )
+                session.add(consumed)
+
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
-                content={"status": "processed", "thread_id": thread_id_str, "increment": increment},
+                content={
+                    "status": "processed",
+                    "thread_id": thread_id_str,
+                    "increment": increment,
+                    "duplicate": False,
+                },
             )
 
     return JSONResponse(

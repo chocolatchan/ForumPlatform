@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forum Platform</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --danger: #ef4444;
+      --success: #10b981;
+      --warning: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header & Navigation */
+    header {
+      background-color: var(--surface);
+      border-bottom: 1px solid var(--surface-border);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+    }
+
+    .brand span {
+      color: var(--primary);
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .nav-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .nav-btn:hover {
+      color: var(--text);
+      border-color: var(--surface-border);
+    }
+
+    .nav-btn.primary {
+      background-color: var(--primary);
+      color: #fff;
+    }
+
+    .nav-btn.primary:hover {
+      background-color: var(--primary-hover);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 9999px;
+      text-transform: uppercase;
+    }
+
+    .badge-member { background: #334155; color: #cbd5e1; }
+    .badge-moderator { background: #065f46; color: #6ee7b7; }
+    .badge-admin { background: #7f1d1d; color: #fca5a5; }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1000px;
+      width: 100%;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    /* Alerts and Feedback */
+    .alert {
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      display: none;
+      font-size: 0.875rem;
+    }
+
+    .alert.info { background: #1e3a8a; border: 1px solid #3b82f6; color: #bfdbfe; }
+    .alert.success { background: #064e3b; border: 1px solid #10b981; color: #a7f3d0; }
+    .alert.error { background: #7f1d1d; border: 1px solid #ef4444; color: #fecaca; }
+    .alert.warning { background: #78350f; border: 1px solid #f59e0b; color: #fde68a; }
+
+    /* Card Panels */
+    .card {
+      background-color: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .card h2 {
+      margin-bottom: 1rem;
+      font-size: 1.5rem;
+    }
+
+    .card p.subtitle {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+    }
+
+    /* Forms */
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: #0f172a;
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #334155; color: var(--text); }
+    .btn-secondary:hover { background: #475569; }
+    .btn-danger { background: var(--danger); color: #fff; }
+
+    /* Views */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* Thread Item */
+    .thread-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .thread-item {
+      background: #0f172a;
+      border: 1px solid var(--surface-border);
+      padding: 1.25rem;
+      border-radius: 8px;
+    }
+
+    .thread-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .thread-meta {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      gap: 1rem;
+    }
+
+    /* Admin Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      font-size: 0.875rem;
+    }
+
+    th, td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--surface-border);
+    }
+
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* OTP timer */
+    .countdown-timer {
+      font-size: 0.85rem;
+      color: var(--warning);
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand" id="brand-logo">Forum<span>Platform</span></div>
+    <nav id="navbar">
+      <!-- Dynamic Nav Items via app.js -->
+    </nav>
+  </header>
+
+  <main>
+    <div id="global-alert" class="alert"></div>
+
+    <!-- VIEW: Home / Threads -->
+    <section id="view-home" class="view active">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2>Community Discussions</h2>
+            <p class="subtitle">Read the latest community topics or start your own discussion.</p>
+          </div>
+          <button id="btn-create-thread-view" class="btn btn-primary" style="display: none;">+ New Thread</button>
+        </div>
+
+        <div id="thread-container" class="thread-list">
+          <p class="subtitle" style="text-align: center; padding: 2rem;">Loading discussions...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: Register -->
+    <section id="view-register" class="view">
+      <div class="card" style="max-width: 480px; margin: 0 auto;">
+        <h2>Create an Account</h2>
+        <p class="subtitle">Join ForumPlatform. We will send a one-time verification code to your email.</p>
+        <form id="form-register">
+          <div class="form-group">
+            <label for="reg-username">Username</label>
+            <input type="text" id="reg-username" class="form-control" placeholder="alphanumeric, 3-30 chars" required />
+          </div>
+          <div class="form-group">
+            <label for="reg-email">Email Address</label>
+            <input type="email" id="reg-email" class="form-control" placeholder="you@example.com" required />
+          </div>
+          <div class="form-group">
+            <label for="reg-password">Password</label>
+            <input type="password" id="reg-password" class="form-control" placeholder="Minimum 8 characters" required />
+          </div>
+          <div class="btn-group">
+            <button type="submit" class="btn btn-primary" id="btn-reg-submit">Register</button>
+            <button type="button" class="btn btn-secondary" id="btn-goto-login">Have an account? Log in</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- VIEW: Verify OTP -->
+    <section id="view-verify-otp" class="view">
+      <div class="card" style="max-width: 480px; margin: 0 auto;">
+        <h2>Verify Your Email</h2>
+        <p class="subtitle">Enter the 6-digit code sent to your email address.</p>
+        <form id="form-verify-otp">
+          <div class="form-group">
+            <label for="verify-email">Email Address</label>
+            <input type="email" id="verify-email" class="form-control" required readonly />
+          </div>
+          <div class="form-group">
+            <label for="verify-otp-code">6-Digit Code</label>
+            <input type="text" id="verify-otp-code" class="form-control" maxlength="6" pattern="[0-9]{6}" placeholder="123456" required />
+            <div id="otp-timer" class="countdown-timer">Code valid for 10 minutes.</div>
+          </div>
+          <div class="btn-group">
+            <button type="submit" class="btn btn-primary" id="btn-verify-submit">Verify & Activate</button>
+            <button type="button" class="btn btn-secondary" id="btn-resend-otp">Resend Code</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- VIEW: Login -->
+    <section id="view-login" class="view">
+      <div class="card" style="max-width: 480px; margin: 0 auto;">
+        <h2>Welcome Back</h2>
+        <p class="subtitle">Sign in to your ForumPlatform account.</p>
+        <form id="form-login">
+          <div class="form-group">
+            <label for="login-identifier">Username or Email</label>
+            <input type="text" id="login-identifier" class="form-control" required />
+          </div>
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" class="form-control" required />
+          </div>
+          <div class="btn-group">
+            <button type="submit" class="btn btn-primary" id="btn-login-submit">Log In</button>
+            <button type="button" class="btn btn-secondary" id="btn-goto-register">Need an account? Register</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- VIEW: Profile -->
+    <section id="view-profile" class="view">
+      <div class="card" style="max-width: 600px; margin: 0 auto;">
+        <h2>User Profile</h2>
+        <p class="subtitle">Your account and session information.</p>
+        <div id="profile-details" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+          <!-- Profile details injected dynamically -->
+        </div>
+        <div class="btn-group">
+          <button id="btn-profile-logout" class="btn btn-danger">Log Out</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: Create Thread -->
+    <section id="view-create-thread" class="view">
+      <div class="card" style="max-width: 640px; margin: 0 auto;">
+        <h2>Create Discussion Thread</h2>
+        <p class="subtitle">Share insights, ask questions, or start a debate.</p>
+        <form id="form-create-thread">
+          <div class="form-group">
+            <label for="thread-title">Title</label>
+            <input type="text" id="thread-title" class="form-control" placeholder="Descriptive title" required />
+          </div>
+          <div class="form-group">
+            <label for="thread-category">Category</label>
+            <select id="thread-category" class="form-control" required>
+              <!-- Populated via API -->
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="thread-content">Content</label>
+            <textarea id="thread-content" class="form-control" rows="5" placeholder="Write your post here..." required></textarea>
+          </div>
+          <div class="btn-group">
+            <button type="submit" class="btn btn-primary">Publish Thread</button>
+            <button type="button" class="btn btn-secondary" id="btn-cancel-create-thread">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- VIEW: Admin Panel (Admin / Moderator) -->
+    <section id="view-admin" class="view">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <h2>Administration & Moderation</h2>
+            <p class="subtitle">Role-aware management tools for platform operators.</p>
+          </div>
+        </div>
+
+        <div id="admin-user-section">
+          <h3>Registered Accounts (Admin Only)</h3>
+          <div id="admin-user-table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="admin-user-tbody">
+                <!-- Dynamically loaded -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="moderation-queue-section" style="margin-top: 2rem;">
+          <h3>Moderation Queue (Moderator / Admin)</h3>
+          <div id="moderation-reports-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Target Type</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Submitted</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="moderation-reports-tbody">
+                <!-- Dynamically loaded -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/static/src/app.js"></script>
+</body>
+</html>

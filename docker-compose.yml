@@ -76,6 +76,13 @@ services:
       SMTP_PORT: 1025
       EMAIL_FROM: ${EMAIL_FROM:-noreply@forumplatform.local}
       DEV_EMAIL_ALLOWLIST: ${DEV_EMAIL_ALLOWLIST:-developer@example.test,tester@example.test}
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8001:8001"
     depends_on:
@@ -102,6 +109,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_content
       REDIS_URL: redis://redis:6379/0
       PORT: 8002
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8002:8002"
     depends_on:
@@ -126,6 +140,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_interactions
       REDIS_URL: redis://redis:6379/0
       PORT: 8003
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8003:8003"
     depends_on:
@@ -150,6 +171,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_moderation
       REDIS_URL: redis://redis:6379/0
       PORT: 8004
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8004:8004"
     depends_on:
@@ -174,6 +202,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_notifications
       REDIS_URL: redis://redis:6379/0
       PORT: 8005
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8005:8005"
     depends_on:
@@ -198,6 +233,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_search
       REDIS_URL: redis://redis:6379/0
       PORT: 8006
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8006:8006"
     depends_on:

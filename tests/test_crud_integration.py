@@ -200,10 +200,10 @@ async def test_user_service_crud_lifecycle():
         csrf_res = await client.get("/auth/csrf")
         csrf_token = csrf_res.json()["csrf_token"]
 
+        client.cookies.set("forum_session", admin_token)
         role_res = await client.patch(
             f"/admin/users/{user_id}/role",
             json={"role": "moderator"},
-            cookies={"forum_session": admin_token},
             headers={"X-CSRF-Token": csrf_token},
         )
         assert role_res.status_code == 200

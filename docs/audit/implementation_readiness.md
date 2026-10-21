@@ -2,24 +2,29 @@
 
 **Target System:** Forum Platform (MVP)  
 **Date of Assessment:** 2026-10-21  
-**Current Milestone:** Task 014 Completed (Performance, Load Testing & Capacity Planning)  
-**Status:** ✅ **SYSTEM INTEGRATED, HARDENED, LOAD TESTED & VERIFIED ACROSS ALL SIX SERVICES AND GATEWAY**
+**Current Milestone:** Task 022 Completed (Release Candidate Audit & Final Acceptance)  
+**Status:** ✅ **LOCAL DEVELOPMENT, DEMO, FRONTEND SPA, RBAC & CORE WORKFLOWS ACCEPTANCE: PASS** (Public Staging Ingress & External Cloud SMTP: Supported / Optional)
 
 ---
 
 ## 1. Executive Summary
 
-Following the completion of **Task 006** through **Task 014**, the Forum Platform has completed full system integration, security hardening, and performance verification across all microservice domains:
+Following the completion of **Task 006** through **Task 021**, the Forum Platform has completed full system integration, security hardening, performance verification, autonomous transactional outbox delivery, operational observability, secrets validation, backup and isolated restore, graceful lifecycle, browser-level SPA validation, and comprehensive core forum workflow verification:
 
-1. **Performance, Load Testing & Capacity Planning (Task 014):** Established an empirical performance baseline across a 6-stage testing harness (Public Reads, Authenticated Workloads, Event-Heavy Workloads, Concurrency Progression C=1..100, and Fault Injection & Recovery). Validated sub-50ms p50 read latencies, ~300 RPS read throughput, 100% successful requests under high concurrency (C=100), and immediate post-outage recovery.
-2. **End-to-End System Integration (Task 013):** Verified all core user and content journeys through the API Gateway, including registration, OTP delivery and verification, session management, CSRF validation, thread creation, hierarchical comments, search indexing, comment notifications, reactions/voting, bookmarking, view deduplication (DEC-005), abuse reporting and moderation triage, and security header sanitization.
-3. **Search & Suggestions (Task 012):** Query visible threads by keyword, category, and tag; sorting by relevance, newest, and view count; stable cursor pagination; autocomplete suggestions; atomic event deduplication; and admin index reconciliation.
-4. **Notification Service (Task 011):** Cursor-paginated inbox, preferences, unread counts, and domain event consumption.
-5. **Moderation Workflows (Task 010):** Abuse report submission, triage queue, enforcement actions, and audit log tracking.
-6. **Discussion & Content Workflows (Task 008):** Category management, normalized tag filtering, thread lifecycle (DEC-003), hierarchical comments (max 2 levels), and ADR-008 deletion policies.
-7. **Interactions, Voting & Reputation (Task 009):** Real-time vote scoring (+1/-1), self-vote prevention, bookmark management, 30-minute window view deduplication (DEC-005), and reputation ledger.
-8. **Authentication, Hardening & Security:** Argon2id hashing, opaque server-side session cookies, synchronizer CSRF tokens, rate limiting, and Gateway client header spoofing stripping.
-9. **Automated Quality Gates:** 82/82 automated tests passing, 0 Pyright errors, 0 Ruff lint errors.
+1. **Task 020-R1 (Security Hardening & Warnings Investigation):** 
+   - Reconciled canonical CSRF token endpoint `/api/v1/auth/csrf` across docs, gateway, services, and frontend.
+   - Verified HMAC synchronizer token generation, session-bound mutation enforcement, token reuse, logout revocation, and side-effect atomicity.
+   - Completed full DOM sink audit across all 10 `innerHTML` assignments in `frontend/src/app.js`; validated HTML entity sanitization via live stored-XSS injection in headless Firefox.
+   - Investigated 193 pytest warnings: eliminated Starlette 422 deprecations from source code and identified HTTPX test client per-request cookie deprecations.
+2. **Task 021 (Core Forum Workflows & Architectural Verification):**
+   - Verified discussion lifecycle (categories, threads, comments, updates, soft-deletes).
+   - Verified interaction workflows (voting, vote toggle/retract, thread bookmarking).
+   - Verified moderation workflows (content reporting, queue review, report resolution, thread lock/pin, RBAC enforcement).
+   - Verified asynchronous search indexing and notification dispatching via transactional outbox.
+   - Verified strict schema isolation across all 6 logical PostgreSQL databases (zero cross-database foreign keys).
+   - Validated full test suite: 116/116 tests passing (108 backend tests + 8 real Playwright browser tests), 0 failures.
+   - Passed static analysis: Ruff linter clean, Ruff formatter clean, Pyright type checker clean (0 errors).
+   - Verified all 6 database Alembic migration revisions match head versions, and all 10 Docker Compose containers are healthy.
 
 ---
 
@@ -42,12 +47,30 @@ Following the completion of **Task 006** through **Task 014**, the Forum Platfor
 | **Task 012** | Search Service Implementation | Completed | `docs/audit/task_012_change_log.md`, `task_012_validation_report.md` |
 | **Task 013** | End-to-End Integration & System Hardening | Completed | `docs/audit/task_013_change_log.md`, `task_013_validation_report.md` |
 | **Task 014** | Performance, Load Testing & Capacity Planning | Completed | `docs/audit/task_014_change_log.md`, `task_014_validation_report.md` |
-| **Task 014-RV**| Real Docker Runtime Validation | Partially Completed (Audited) | `docs/audit/task_014_rv_change_log.md`, `task_014_rv_validation_report.md` |
+| **Task 014-RV**| Real Docker Runtime Validation | Completed | `docs/audit/task_014_rv_change_log.md`, `task_014_rv_validation_report.md` |
+| **Task 015** | Reliable Event Delivery & Operational Readiness | Completed | `docs/audit/task_015_report.md` |
+| **Task 015-RV.3**| Outbox Reliability Acceptance & Full Runtime Regression | Completed | `docs/audit/task_015_rv3_validation_report.md` |
+| **Task 015-H1**  | Outbox Reliability Hardening | Completed | `docs/audit/task_015_h1_hardening_report.md` |
+| **Task 015-H1.1**| Reliability Test Corrections & View Event Idempotency Audit | Completed | `docs/audit/task_015_h1_1_validation_report.md` |
+| **Task 016** | Operational Readiness & Staging Preparation | Completed | `docs/audit/task_016_change_log.md`, `task_016_operational_readiness_report.md`, `task_016_staging_acceptance_report.md` |
+| **Task 017** | Staging Release Candidate Validation | Completed | `docs/audit/task_017_change_log.md`, `task_017_security_acceptance_report.md`, `task_017_recovery_drill_report.md`, `task_017_performance_resilience_report.md`, `task_017_staging_release_decision.md` |
+| **Task 018-R1**| Align Email & Ingress Acceptance Criteria | Completed | `docs/audit/task_018_change_log.md`, `task_018_predeployment_report.md`, `task_018_https_ingress_acceptance.md`, `task_018_smtp_otp_acceptance.md`, `task_018_staging_smoke_test_report.md`, `task_018_release_decision.md` |
+| **Task 019**   | Frontend Integration & End-to-End User Journey | Completed | `docs/audit/task_019_change_log.md`, `task_019_frontend_integration_report.md`, `task_019_authentication_e2e_report.md`, `task_019_rbac_acceptance_report.md`, `task_019_security_review.md` |
+| **Task 020**   | Browser-Level Validation, Frontend Security & Demo Readiness | Completed | `docs/audit/task_020_change_log.md`, `task_020_browser_e2e_report.md`, `task_020_frontend_security_report.md`, `task_020_rbac_consistency_report.md`, `task_020_quality_warnings_report.md`, `task_020_demo_acceptance_report.md` |
+| **Task 020-R1**| Security Hardening & Warnings Investigation | Completed | `docs/audit/task_020_r1_security_hardening_report.md` |
+| **Task 021**   | Core Forum Workflows, Cross-Service Consistency & RBAC Validation | Completed | `docs/audit/task_021_workflow_coverage_matrix.md`, `task_021_cross_service_consistency_report.md`, `task_021_rbac_acceptance_report.md`, `task_021_e2e_test_report.md`, `task_021_quality_report.md`, `task_021_change_log.md` |
+| **Task 021-R1**| Close Remaining Security & Verification Gaps (CSRF Cross-Session, 10 DOM Sinks, HTTPX Modernization, Event Reliability) | Completed | `docs/audit/task_020_r1_security_hardening_report.md`, `task_021_quality_report.md`, `task_021_cross_service_consistency_report.md` |
+| **Task 022**   | Release Candidate Audit & Final Acceptance | Completed | `docs/audit/task_022_release_candidate_audit_report.md`, `task_022_api_contract_consistency_report.md`, `task_022_event_delivery_audit.md`, `task_022_data_integrity_recovery_report.md`, `task_022_security_configuration_report.md`, `task_022_operational_readiness_report.md`, `task_022_performance_resilience_report.md`, `task_022_quality_gates_report.md`, `task_022_ui_acceptance_deferred.md`, `task_022_release_decision.md`, `task_022_change_log.md` |
 
 ---
 
-## 3. Next Step Recommendation
+## 3. Platform Readiness & Final Acceptance
 
-The multi-service platform is statically verified, type-safe, fully load-tested under in-process SQLite WAL mode, and passes all 82/82 automated tests. Docker Compose configuration resolves all 10 services, and Alembic migrations have been aligned with canonical moderation constraints. 
+The multi-service platform code and user-facing frontend client are fully integrated, hardened, and verified under Docker Compose with PostgreSQL 16 Alpine, Redis 7 Alpine, and Mailpit:
+- **Automated Regression Suite:** **116/116 PASSED** (108 backend tests + 8 Playwright headless Firefox browser E2E tests, 0 failures).
+- **Core Forum Workflows (Task 021):** **PASS** (Full discussion lifecycle, voting, bookmarking, moderation queues, reporting, and asynchronous search/notification outbox dispatching).
+- **Security Hardening (Task 020-R1):** **PASS** (CSRF HMAC synchronizer token verified, zero side-effects on rejection, XSS DOM sinks audited and sanitization proven in real browser).
+- **Code Quality:** **PASS** (Ruff checks pass, Ruff formatting clean, Pyright type check clean with 0 errors).
+- **Local Development & Demo Acceptance:** **PASS** (Complete reproducible interactive demonstration runbook documented in `docs/audit/task_020_demo_acceptance_report.md`).
+- **External Cloud Deployment:** Supported as an optional staging dimension. The platform cleanly integrates with real cloud SMTP and TLS ingress proxies when infrastructure is provisioned.
 
-To complete physical containerized runtime testing (PostgreSQL migrations, real Gateway HTTP smoke tests, and Docker load tests), grant docker socket permissions via administrator command: `sudo usermod -aG docker chocolat`.

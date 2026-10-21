@@ -275,10 +275,10 @@ async def test_e2e_account_lifecycle_and_security(gateway_client: AsyncClient):
     assert login_resp.status_code == 200
     assert "forum_session" in login_resp.cookies
     session_cookie = login_resp.cookies["forum_session"]
-    client_cookies = {"forum_session": session_cookie}
 
     # 4. Access authenticated session
-    session_resp = await gateway_client.get("/api/v1/auth/session", cookies=client_cookies)
+    gateway_client.cookies.set("forum_session", session_cookie)
+    session_resp = await gateway_client.get("/api/v1/auth/session")
     assert session_resp.status_code == 200
     assert session_resp.json()["user"]["id"] == user_id
 
@@ -290,7 +290,6 @@ async def test_e2e_account_lifecycle_and_security(gateway_client: AsyncClient):
     # Attempt mutation without CSRF -> 403 Forbidden
     no_csrf_resp = await gateway_client.patch(
         "/api/v1/profile",
-        cookies=client_cookies,
         json={"display_name": "Alice in Wonderland"},
     )
     assert no_csrf_resp.status_code == 403
@@ -298,7 +297,6 @@ async def test_e2e_account_lifecycle_and_security(gateway_client: AsyncClient):
     # Mutation with valid CSRF token -> 200 OK
     patch_resp = await gateway_client.patch(
         "/api/v1/profile",
-        cookies=client_cookies,
         headers={"X-CSRF-Token": csrf_token},
         json={"display_name": "Alice in Wonderland"},
     )
@@ -308,13 +306,12 @@ async def test_e2e_account_lifecycle_and_security(gateway_client: AsyncClient):
     # 6. Logout
     logout_resp = await gateway_client.post(
         "/api/v1/auth/logout",
-        cookies=client_cookies,
         headers={"X-CSRF-Token": csrf_token},
     )
     assert logout_resp.status_code == 204
 
     # Subsequent access fails
-    revoked_resp = await gateway_client.get("/api/v1/auth/session", cookies=client_cookies)
+    revoked_resp = await gateway_client.get("/api/v1/auth/session")
     assert revoked_resp.status_code == 401
 
 
@@ -385,15 +382,14 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
             )
             session.add(db_s)
 
-    admin_cookies = {"forum_session": admin_session}
-    author_cookies = {"forum_session": author_session}
-    responder_cookies = {"forum_session": responder_session}
+    admin_headers = {"Cookie": f"forum_session={admin_session}", "X-CSRF-Token": csrf_token}
+    author_headers = {"Cookie": f"forum_session={author_session}", "X-CSRF-Token": csrf_token}
+    responder_headers = {"Cookie": f"forum_session={responder_session}", "X-CSRF-Token": csrf_token}
 
     # 2. Admin creates Category via Gateway
     cat_resp = await gateway_client.post(
         "/api/v1/admin/categories",
-        cookies=admin_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=admin_headers,
         json={
             "name": "Backend Engineering",
             "slug": "backend-engineering",
@@ -406,8 +402,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 3. Author creates Thread via Gateway
     thread_resp = await gateway_client.post(
         "/api/v1/threads",
-        cookies=author_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=author_headers,
         json={
             "category_id": cat_id,
             "title": "FastAPI with PostgreSQL Outbox Pattern",
@@ -445,8 +440,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 4. Responder adds comment via Gateway
     comment_resp = await gateway_client.post(
         f"/api/v1/threads/{thread_id}/comments",
-        cookies=responder_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=responder_headers,
         json={"body": "Great article! How do you handle consumer deduplication?"},
     )
     assert comment_resp.status_code == 201
@@ -473,7 +467,10 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
         )
 
     # Verify Author received notification via Gateway
-    inbox_resp = await gateway_client.get("/api/v1/notifications", cookies=author_cookies)
+    inbox_resp = await gateway_client.get(
+        "/api/v1/notifications",
+        headers={"Cookie": f"forum_session={author_session}"},
+    )
     assert inbox_resp.status_code == 200
     notifs = inbox_resp.json()["items"]
     assert len(notifs) >= 1
@@ -482,8 +479,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 5. Responder votes and bookmarks Thread via Gateway
     vote_resp = await gateway_client.put(
         f"/api/v1/threads/{thread_id}/vote",
-        cookies=responder_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=responder_headers,
         json={"value": 1},
     )
     assert vote_resp.status_code == 200
@@ -491,8 +487,8 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
 
     bm_resp = await gateway_client.put(
         f"/api/v1/threads/{thread_id}/bookmark",
-        cookies=responder_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=responder_headers,
+        json={},
     )
     assert bm_resp.status_code == 200
     assert bm_resp.json()["bookmarked"] is True
@@ -500,8 +496,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 6. Author sets Comment as Best Answer via Gateway
     best_resp = await gateway_client.put(
         f"/api/v1/threads/{thread_id}/best-answer",
-        cookies=author_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=author_headers,
         json={"comment_id": comment_id},
     )
     assert best_resp.status_code == 200
@@ -509,13 +504,15 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
 
     # 7. Thread View deduplication (DEC-005) & propagation
     view1 = await gateway_client.post(
-        f"/api/v1/threads/{thread_id}/view", cookies=responder_cookies
+        f"/api/v1/threads/{thread_id}/view",
+        headers={"Cookie": f"forum_session={responder_session}"},
     )
     assert view1.status_code == 204
 
     # Duplicate view within 30 min is deduplicated
     view2 = await gateway_client.post(
-        f"/api/v1/threads/{thread_id}/view", cookies=responder_cookies
+        f"/api/v1/threads/{thread_id}/view",
+        headers={"Cookie": f"forum_session={responder_session}"},
     )
     assert view2.status_code == 204
 
@@ -535,8 +532,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 8. Abuse Report Submission & Moderation Triage via Gateway
     report_resp = await gateway_client.post(
         "/api/v1/reports",
-        cookies=responder_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=responder_headers,
         json={
             "target_type": "thread",
             "target_id": thread_id,
@@ -550,8 +546,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # Duplicate active report rejected -> 409 Conflict
     dup_report = await gateway_client.post(
         "/api/v1/reports",
-        cookies=responder_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=responder_headers,
         json={
             "target_type": "thread",
             "target_id": thread_id,
@@ -565,7 +560,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # Admin reviews report in queue
     q_resp = await gateway_client.get(
         "/api/v1/moderation/reports?status=pending",
-        cookies=admin_cookies,
+        headers={"Cookie": f"forum_session={admin_session}"},
     )
     assert q_resp.status_code == 200
     assert any(r["id"] == report_id for r in q_resp.json()["items"])
@@ -573,8 +568,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # Claim report for review (pending -> reviewing)
     claim_resp = await gateway_client.patch(
         f"/api/v1/moderation/reports/{report_id}/review",
-        cookies=admin_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=admin_headers,
     )
     assert claim_resp.status_code == 200
     assert claim_resp.json()["status"] == "reviewing"
@@ -582,8 +576,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # Moderator applies proactive Lock action
     lock_resp = await gateway_client.put(
         f"/api/v1/threads/{thread_id}/lock",
-        cookies=admin_cookies,
-        headers={"X-CSRF-Token": csrf_token},
+        headers=admin_headers,
         json={"is_locked": True},
     )
     assert lock_resp.status_code == 200
@@ -602,8 +595,8 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     # 10. Security Header Sanitization Check
     spoof_res = await gateway_client.get(
         "/api/v1/profile",
-        cookies=author_cookies,
         headers={
+            "Cookie": f"forum_session={author_session}",
             "X-Authenticated-User-ID": str(admin_id),
             "X-Authenticated-Role": "admin",
             "X-Forwarded-User-ID": str(admin_id),

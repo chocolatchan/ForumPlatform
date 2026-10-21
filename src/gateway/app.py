@@ -7,18 +7,22 @@ from pathlib import Path
 import httpx
 import yaml
 from fastapi import FastAPI, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.common.logging import configure_logging
+from src.common.metrics import MetricsRegistry, setup_metrics_endpoint
 from src.gateway.config import gateway_settings
 from src.gateway.forwarder import forward_request, get_or_generate_request_id
 from src.gateway.router import GatewayRouter
 
 configure_logging(gateway_settings.service_name, gateway_settings.log_level)
+metrics_registry = MetricsRegistry(gateway_settings.service_name)
 
 OPENAPI_SPEC_PATH = (
     Path(__file__).resolve().parent.parent / "docs" / "forum_public_api.openapi.yaml"
 )
+FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 _cached_openapi: dict | None = None
 
 
@@ -63,6 +67,8 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+setup_metrics_endpoint(app, metrics_registry)
 
 
 def custom_openapi() -> dict:
@@ -131,3 +137,15 @@ async def gateway_proxy(request: Request, path: str) -> Response:
         target_url=target_url,
         request_id=request_id,
     )
+
+
+# --- Frontend Client Serving (DEC / Task 019) ---
+if FRONTEND_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index() -> Response:
+        index_file = FRONTEND_DIR / "index.html"
+        if index_file.is_file():
+            return FileResponse(str(index_file))
+        return JSONResponse({"status": "ok", "message": "Forum Platform Gateway"})

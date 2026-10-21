@@ -1,0 +1,159 @@
+{
+  "timestamp": "2026-10-21T03:43:15.003838+00:00",
+  "environment": {
+    "runtime": "Docker Compose",
+    "database": "PostgreSQL 16 Alpine",
+    "cache": "Redis 7 Alpine",
+    "gateway": "API Gateway Port 8000",
+    "host_cpus": 16,
+    "host_memory": "15GiB"
+  },
+  "results": {
+    "categories_read": {
+      "scenario": "Public Reads: List Categories",
+      "total_requests": 200,
+      "successful_requests": 200,
+      "failed_requests": 0,
+      "duration_seconds": 0.854,
+      "throughput_rps": 234.27,
+      "latency_p50_ms": 33.03,
+      "latency_p95_ms": 110.47,
+      "latency_p99_ms": 126.34,
+      "latency_min_ms": 16.39,
+      "latency_max_ms": 140.97,
+      "status_distribution": {
+        "200": 200
+      }
+    },
+    "threads_read": {
+      "scenario": "Public Reads: List Threads (Paginated)",
+      "total_requests": 200,
+      "successful_requests": 200,
+      "failed_requests": 0,
+      "duration_seconds": 0.927,
+      "throughput_rps": 215.8,
+      "latency_p50_ms": 39.54,
+      "latency_p95_ms": 90.46,
+      "latency_p99_ms": 107.82,
+      "latency_min_ms": 20.11,
+      "latency_max_ms": 108.78,
+      "status_distribution": {
+        "200": 200
+      }
+    },
+    "search_queries": {
+      "scenario": "Search: Keyword Query",
+      "total_requests": 150,
+      "successful_requests": 150,
+      "failed_requests": 0,
+      "duration_seconds": 0.839,
+      "throughput_rps": 178.73,
+      "latency_p50_ms": 47.16,
+      "latency_p95_ms": 117.26,
+      "latency_p99_ms": 154.7,
+      "latency_min_ms": 18.29,
+      "latency_max_ms": 175.05,
+      "status_distribution": {
+        "200": 150
+      }
+    },
+    "search_suggestions": {
+      "scenario": "Search: Autocomplete Suggestions",
+      "total_requests": 150,
+      "successful_requests": 150,
+      "failed_requests": 0,
+      "duration_seconds": 0.834,
+      "throughput_rps": 179.85,
+      "latency_p50_ms": 46.97,
+      "latency_p95_ms": 98.93,
+      "latency_p99_ms": 337.56,
+      "latency_min_ms": 19.45,
+      "latency_max_ms": 345.23,
+      "status_distribution": {
+        "200": 150
+      }
+    },
+    "authenticated_profile": {
+      "scenario": "Authenticated: Profile Read",
+      "total_requests": 150,
+      "successful_requests": 150,
+      "failed_requests": 0,
+      "duration_seconds": 1.17,
+      "throughput_rps": 128.2,
+      "latency_p50_ms": 67.45,
+      "latency_p95_ms": 157.54,
+      "latency_p99_ms": 242.28,
+      "latency_min_ms": 21.07,
+      "latency_max_ms": 244.07,
+      "status_distribution": {
+        "200": 150
+      }
+    },
+    "concurrency_progression": [
+      {
+        "scenario": "Concurrency Progression (C=1)",
+        "total_requests": 150,
+        "successful_requests": 150,
+        "failed_requests": 0,
+        "duration_seconds": 1.468,
+        "throughput_rps": 102.19,
+        "latency_p50_ms": 9.46,
+        "latency_p95_ms": 12.49,
+        "latency_p99_ms": 13.93,
+        "latency_min_ms": 7.34,
+        "latency_max_ms": 17.79,
+        "status_distribution": {
+          "200": 150
+        }
+      },
+      {
+        "scenario": "Concurrency Progression (C=5)",
+        "total_requests": 150,
+        "successful_requests": 150,
+        "failed_requests": 0,
+        "duration_seconds": 0.656,
+        "throughput_rps": 228.74,
+        "latency_p50_ms": 19.25,
+        "latency_p95_ms": 35.18,
+        "latency_p99_ms": 42.33,
+        "latency_min_ms": 13.7,
+        "latency_max_ms": 43.12,
+        "status_distribution": {
+          "200": 150
+        }
+      },
+      {
+        "scenario": "Concurrency Progression (C=20)",
+        "total_requests": 150,
+        "successful_requests": 150,
+        "failed_requests": 0,
+        "duration_seconds": 0.871,
+        "throughput_rps": 172.29,
+        "latency_p50_ms": 91.0,
+        "latency_p95_ms": 246.67,
+        "latency_p99_ms": 340.95,
+        "latency_min_ms": 28.54,
+        "latency_max_ms": 378.06,
+        "status_distribution": {
+          "200": 150
+        }
+      },
+      {
+        "scenario": "Concurrency Progression (C=50)",
+        "total_requests": 150,
+        "successful_requests": 150,
+        "failed_requests": 0,
+        "duration_seconds": 0.933,
+        "throughput_rps": 160.76,
+        "latency_p50_ms": 209.32,
+        "latency_p95_ms": 683.38,
+        "latency_p99_ms": 829.22,
+        "latency_min_ms": 43.41,
+        "latency_max_ms": 860.24,
+        "status_distribution": {
+          "200": 150
+        }
+      }
+    ]
+  }
+}
