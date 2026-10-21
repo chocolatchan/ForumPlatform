@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from http.cookiejar import CookieJar
 from pathlib import Path
 
 import httpx
@@ -38,6 +39,16 @@ def load_canonical_openapi() -> dict:
     return _cached_openapi
 
 
+class StatelessCookieJar(CookieJar):
+    """Stateless cookie jar to prevent cross-request cookie leakage on shared gateway client."""
+
+    def extract_cookies(self, response: object, request: object) -> None:
+        pass
+
+    def set_cookie(self, cookie: object) -> None:
+        pass
+
+
 # Shared HTTP client for connection pooling
 http_client: httpx.AsyncClient | None = None
 router = GatewayRouter(gateway_settings)
@@ -53,7 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         write=gateway_settings.request_timeout_seconds,
         pool=5.0,
     )
-    http_client = httpx.AsyncClient(limits=limits, timeout=timeouts)
+    http_client = httpx.AsyncClient(limits=limits, timeout=timeouts, cookies=StatelessCookieJar())
     yield
     await http_client.aclose()
     http_client = None

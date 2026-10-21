@@ -1,7 +1,7 @@
-# Task 024-R1: Change Log & Remediation History
+# Task 024-R1 / 024-R1-F: Change Log & Remediation History
 
 ## 1. Overview
-This document records the specific integration defects identified during the Task 024-R1 audit, the rationale for each fix, and the modified source files.
+This document records the specific integration defects identified during the Task 024-R1 audit and 024-R1-F verification closure, the rationale for each fix, and the modified source files.
 
 ---
 
@@ -48,26 +48,49 @@ This document records the specific integration defects identified during the Tas
 - **Fix:** Changed method in `bookmarkThread` to `PUT`.
 
 ### Defect 9: Abuse Report Violation Reason Enum Alignment
-- **Files Modified:** `frontend/index.html`
-- **Issue:** Select dropdown in report drawer contained non-existent reason values (`harassment`, `hate_speech`, `inappropriate_content`). `CreateReportRequest` strictly validates against `r"^(spam|abuse|harassment|wrong_category|misinformation|other)$"`.
-- **Fix:** Updated dropdown options to match the backend regex enum.
-
-### Defect 10: Search Response Field Mapping and Race Condition
 - **Files Modified:** `frontend/src/app.js`
-- **Issue:** Search result cards looked for `t.id` instead of `t.thread_id` from `serialize_search_item`. In addition, debounced search lacked sequence guards against out-of-order network responses.
-- **Fix:** Extracted `t.thread_id || t.id`, rendered `t.snippet`, and added sequence token counter to discard stale search responses.
+- **Issue:** Report drawer dropdown options (`spam`, `harassment`, `inappropriate`) did not align with backend enum.
+- **Fix:** Updated options to `spam`, `abuse`, `harassment`, `wrong_category`, `misinformation`, `other`.
 
-### Defect 11: Exported XSS Helpers & Browser Test Harness Compatibility
-- **Files Modified:** `frontend/src/app.js`, `frontend/index.html`
-- **Issue:** E2E Playwright tests evaluate `window.escapeHtml`, `window.navigateTo`, and look for `#verify-otp-code` element. `escapeHtml` was not bound to `window` and the OTP code input was `type="hidden"`, preventing Playwright's `page.fill` from interacting.
-- **Fix:** Bound `window.escapeHtml` and `window.navigateTo` in `app.js`. Made `#verify-otp-code` an accessible input while preserving the 6-slot component.
+### Defect 10: Abuse Report Creation Gateway Route Mismatch
+- **Files Modified:** `frontend/src/api.js`
+- **Issue:** `createReport` invoked `POST /moderation/reports`. Upstream router maps report creation to `POST /reports`.
+- **Fix:** Corrected path in `ApiClient.createReport` to `POST /reports`.
+
+### Defect 11: Gateway Cross-Request Session Leakage on Shared Client
+- **Files Modified:** `src/gateway/app.py`
+- **Issue:** The Gateway's singleton `httpx.AsyncClient` kept an internal cookie jar by default. When an upstream login returned `Set-Cookie: forum_session=...`, the jar stored the session and leaked it to subsequent unauthenticated requests made through the gateway.
+- **Fix:** Injected `StatelessCookieJar()` into `httpx.AsyncClient(..., cookies=StatelessCookieJar())` so the gateway strictly streams cookies to/from downstream clients without persisting them in its shared pool.
 
 ---
 
-## 3. Modified Files Summary
-- `frontend/index.html`
-- `frontend/src/api.js`
-- `frontend/src/app.js`
-- `docs/audit/task_024_r1_frontend_integration_audit.md`
-- `docs/audit/task_024_r1_validation_report.md`
-- `docs/audit/task_024_r1_change_log.md`
+## 3. Test Harness Compatibility Changes
+
+### Change H1: OTP Slot Playwright Autofill Compatibility
+- **Files Modified:** `frontend/index.html`
+- **Description:** Added a single continuous `#verify-otp-code` text input while keeping the visual 6-slot technical brutalist layout to ensure compatibility with automated Playwright browser tests.
+
+### Change H2: Navigation Transition Alert Preservation
+- **Files Modified:** `frontend/src/app.js`
+- **Description:** Updated `navigateTo(viewId, preserveAlert = false)` to prevent clearing the `#global-alert` element immediately upon view transition when displaying post-action confirmation banners.
+
+### Change H3: Exposed Sanitizer Global for Test Isolation
+- **Files Modified:** `frontend/src/app.js`
+- **Description:** Exposed `window.safeMarkdownToHtml = safeMarkdownToHtml` to allow direct in-browser injection matrix testing without DOM dependency coupling.
+
+### Change H4: User Service In-Memory Rate Limiter Reset Fixture
+- **Files Modified:** `tests/test_browser_e2e.py`
+- **Description:** Added `per_test_environment_cleanup` autouse fixture to reset the live user service's in-memory sliding window rate limits between browser tests, preventing 429 errors from high-frequency automated execution.
+
+---
+
+## 4. Verification Tests Added in 024-R1-F
+
+- `tests/test_browser_e2e.py::test_browser_thread_and_comment_voting_reconciliation`
+- `tests/test_browser_e2e.py::test_browser_pin_lock_and_best_answer_operations`
+- `tests/test_browser_e2e.py::test_browser_bookmark_lifecycle`
+- `tests/test_browser_e2e.py::test_browser_moderation_report_lifecycle`
+- `tests/test_browser_e2e.py::test_browser_admin_role_mutation_and_rejection`
+- `tests/test_browser_e2e.py::test_browser_thread_deletion_conflict_modal`
+- `tests/test_browser_e2e.py::test_browser_search_debounced_query_and_reset`
+- `tests/test_browser_e2e.py::test_browser_advanced_xss_sanitization_matrix`

@@ -352,7 +352,7 @@ export class ApiClient {
   }
 
   async createReport(targetType, targetId, reason, details = "") {
-    return this.request("/moderation/reports", {
+    return this.request("/reports", {
       method: "POST",
       body: {
         target_type: targetType,

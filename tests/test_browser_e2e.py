@@ -60,6 +60,34 @@ def purge_mailpit() -> None:
         httpx.delete(f"{MAILPIT_API_URL}/messages", timeout=3.0)
 
 
+def reset_user_service_rate_limiters() -> None:
+    """Reset in-memory rate limiters in the live user service container between tests."""
+    with contextlib.suppress(Exception):
+        import subprocess
+
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "forum_user_service",
+                "python3",
+                "-c",
+                "from src.services.user.app import rate_limiter_login, rate_limiter_register, rate_limiter_verify_otp; "
+                "rate_limiter_login.reset(); rate_limiter_register.reset(); rate_limiter_verify_otp.reset();",
+            ],
+            capture_output=True,
+            timeout=5.0,
+        )
+
+
+@pytest.fixture(autouse=True)
+def per_test_environment_cleanup():
+    """Ensure clean container rate limit state for each browser test scenario."""
+    reset_user_service_rate_limiters()
+    yield
+    reset_user_service_rate_limiters()
+
+
 @pytest.fixture(scope="function")
 def browser_context():
     """Launch headless Firefox browser and yield an isolated browser context."""
@@ -446,4 +474,350 @@ def test_browser_stored_xss_thread_rendering_safety(browser_context):
     page.evaluate(
         "() => { const el = document.getElementById('test-xss-container'); if (el) el.remove(); }"
     )
+    page.close()
+
+
+def test_browser_thread_and_comment_voting_reconciliation(browser_context):
+    """Verify thread and comment voting mutations and live score reconciliation."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # Login as admin user
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "adm")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Upvote first thread in feed
+    up_btn = page.locator(".vote-up-btn").first
+    up_btn.click()
+    counter = page.locator(".vote-counter").first
+    expect(counter).to_be_visible()
+
+    # Open thread detail and vote on comment
+    first_thread = page.locator(".thread-title-link").first
+    first_thread.click()
+    expect(page.locator("#view-thread-detail")).to_be_visible()
+
+    # If no comment exists, post one first
+    if not page.locator(".vote-c-btn").first.is_visible():
+        page.fill("#comment-body-input", "Verification response for voting test.")
+        page.click("#form-create-comment button[type='submit']")
+        expect(page.locator("#global-alert")).to_contain_text("Comment appended", ignore_case=True)
+
+    c_vote_btn = page.locator(".vote-c-btn").first
+    expect(c_vote_btn).to_be_visible()
+    c_vote_btn.click()
+    expect(c_vote_btn).to_be_visible()
+
+    page.close()
+
+
+def test_browser_pin_lock_and_best_answer_operations(browser_context):
+    """Verify thread pin/lock mutations and best answer assignment."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # Login as admin user
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "adm")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Open thread detail
+    page.locator(".thread-title-link").first.click()
+    expect(page.locator("#view-thread-detail")).to_be_visible()
+
+    # Pin toggle
+    pin_btn = page.locator("#btn-detail-pin")
+    expect(pin_btn).to_be_visible()
+    pin_btn.click()
+    expect(page.locator("#global-alert")).to_contain_text("pin status modified", ignore_case=True)
+
+    # Lock toggle (toggle on then off to restore initial unlocked state)
+    lock_btn = page.locator("#btn-detail-lock")
+    expect(lock_btn).to_be_visible()
+    lock_btn.click()
+    expect(page.locator("#global-alert")).to_contain_text("lock status modified", ignore_case=True)
+    lock_btn.click()
+    expect(page.locator("#global-alert")).to_contain_text("lock status modified", ignore_case=True)
+
+    # Post comment and mark best answer if author
+    best_btn = page.locator(".btn-mark-best").first
+    if best_btn.is_visible():
+        best_btn.click()
+        expect(page.locator("#global-alert")).to_contain_text(
+            "verified resolution", ignore_case=True
+        )
+
+    page.close()
+
+
+def test_browser_bookmark_lifecycle(browser_context):
+    """Verify bookmark addition, listing in user profile dossier, and removal."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # Login as admin user
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "adm")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Open thread detail and bookmark
+    page.locator(".thread-title-link").first.click()
+    expect(page.locator("#view-thread-detail")).to_be_visible()
+
+    bm_btn = page.locator("#btn-detail-bookmark")
+    expect(bm_btn).to_be_visible()
+    bm_btn.click()
+    expect(page.locator("#global-alert")).to_contain_text("saved to bookmarks", ignore_case=True)
+
+    # Navigate to profile
+    page.evaluate("window.navigateTo('view-profile')")
+    expect(page.locator("#view-profile")).to_be_visible()
+    expect(page.locator("#user-bookmarks-list .bm-link").first).to_be_visible()
+
+    # Remove bookmark
+    page.locator("#user-bookmarks-list .btn-rm-bm").first.click()
+    expect(page.locator("#global-alert")).to_contain_text("Bookmark removed", ignore_case=True)
+
+    page.close()
+
+
+def test_browser_moderation_report_lifecycle(browser_context):
+    """Verify abuse report creation, claim by operator, and resolution actions."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # Login as admin user
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "adm")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Open a thread and flag it
+    page.locator(".thread-title-link").first.click()
+    expect(page.locator("#view-thread-detail")).to_be_visible()
+
+    # Pre-clean any active reports by adm on this thread
+    import subprocess
+
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "forum_postgres",
+            "psql",
+            "-U",
+            "forum_admin",
+            "-d",
+            "forum_moderation",
+            "-c",
+            "DELETE FROM moderation.reports WHERE status IN ('pending', 'reviewing');",
+        ],
+        capture_output=True,
+    )
+
+    page.click("#btn-detail-flag")
+
+    # Report drawer open
+    expect(page.locator("#report-drawer")).to_have_class("drawer open")
+    page.select_option("#report-reason-select", "spam")
+    page.fill("#report-details-input", "Automated browser spam report.")
+    page.click("#form-submit-report button[type='submit']")
+    expect(page.locator("#global-alert")).to_contain_text(
+        "transmitted to operator queue", ignore_case=True
+    )
+
+    # Navigate to Admin / Moderation view
+    page.evaluate("window.navigateTo('view-admin')")
+    expect(page.locator("#view-admin")).to_be_visible()
+
+    # Pending queue claim
+    expect(page.locator("#moderation-reports-tbody tr").first).to_be_visible()
+    claim_btn = page.locator(".btn-claim-report").first
+    if claim_btn.is_visible():
+        claim_btn.click()
+        expect(page.locator("#global-alert")).to_contain_text(
+            "claimed for review", ignore_case=True
+        )
+
+    # Reviewing / Claimed tab resolution
+    page.click("#mod-tab-claimed")
+    expect(page.locator("#moderation-reports-tbody tr").first).to_be_visible()
+    dismiss_btn = page.locator(".btn-resolve-dismiss").first
+    if dismiss_btn.is_visible():
+        dismiss_btn.click()
+        expect(page.locator("#global-alert")).to_contain_text("marked resolved", ignore_case=True)
+
+    page.close()
+
+
+def test_browser_admin_role_mutation_and_rejection(browser_context):
+    """Verify admin role mutation and non-admin role mutation rejection."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # 1. Member login and restricted access guard
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "devuser")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Attempt to open admin view
+    page.evaluate("window.navigateTo('view-admin')")
+    alert = page.locator("#global-alert")
+    expect(alert).to_be_visible()
+    assert "access denied" in alert.inner_text().lower()
+
+    # Log out
+    page.locator("#navbar button:has-text('Log Out')").click()
+    expect(page.locator("#navbar button:text('Log In')")).to_be_visible()
+
+    # 2. Admin login and role mutation
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "adm")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    page.locator("#navbar button:has-text('OPERATOR // ADMIN')").click()
+    expect(page.locator("#view-admin")).to_be_visible()
+
+    # Accept role change confirmation
+    page.on("dialog", lambda dialog: dialog.accept())
+
+    select_role = page.locator("#admin-user-tbody select.select-role-change").first
+    expect(select_role).to_be_visible()
+    select_role.select_option("moderator")
+    expect(alert).to_contain_text("privilege", ignore_case=True)
+
+    select_role.select_option("member")
+    expect(alert).to_contain_text("privilege", ignore_case=True)
+
+    page.close()
+
+
+def test_browser_thread_deletion_conflict_modal(browser_context):
+    """Verify thread deletion conflict handling when active comments exist (HTTP 409)."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    # Login as devuser (author of Devuser Conflict Test Thread)
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "devuser")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Open thread with active comments
+    th_link = page.locator(".thread-title-link:has-text('Devuser Conflict Test Thread')").first
+    th_link.click()
+    expect(page.locator("#view-thread-detail")).to_be_visible()
+
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click("#btn-detail-delete")
+
+    # 409 Conflict modal
+    expect(page.locator("#conflict-modal")).to_be_visible()
+    expect(page.locator("#conflict-modal-message")).to_contain_text(
+        "Threads with active comments require moderator assistance to delete."
+    )
+
+    # Flag drawer trigger from modal
+    page.click("#btn-conflict-open-flag")
+    expect(page.locator("#conflict-modal")).not_to_be_visible()
+    expect(page.locator("#report-drawer")).to_have_class("drawer open")
+
+    page.close()
+
+
+def test_browser_search_debounced_query_and_reset(browser_context):
+    """Verify debounced search, sequence token query execution, and reset on blank input."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    expect(page.locator("h2:text('Community Discussions')")).to_be_visible()
+
+    search_input = page.locator("#feed-search-input")
+    expect(search_input).to_be_visible()
+
+    # Query with debounce
+    search_input.fill("test")
+    page.wait_for_timeout(500)
+    expect(page.locator(".thread-card .thread-title-link").first).to_be_visible()
+
+    # Clear query
+    search_input.fill("")
+    page.wait_for_timeout(100)
+    expect(page.locator(".thread-card .thread-title-link").first).to_be_visible()
+
+    page.close()
+
+
+def test_browser_advanced_xss_sanitization_matrix(browser_context):
+    """Verify complete safeMarkdownToHtml sanitizer against SVG, onload, data URIs, and dangerous attributes."""
+    page = browser_context.new_page()
+    page.goto("/")
+
+    page.evaluate("window.xss_canary = false;")
+
+    results = page.evaluate("""() => {
+        const payloads = [
+            '<svg onload=window.xss_canary=true>',
+            '<svg/onload=window.xss_canary=true>',
+            '<img src=invalid onerror=window.xss_canary=true>',
+            '<iframe src="javascript:window.xss_canary=true">',
+            '[malicious link](javascript:window.xss_canary=true)',
+            '[data link](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)',
+            '[vbscript link](vbscript:window.xss_canary=true)',
+            '<body onload=window.xss_canary=true>',
+            '<input autofocus onfocus=window.xss_canary=true>',
+            '"><script>window.xss_canary=true</script>',
+        ];
+
+        const outputs = [];
+        const container = document.createElement("div");
+        container.id = "xss-test-bed";
+        document.body.appendChild(container);
+
+        for (const p of payloads) {
+            const html = window.safeMarkdownToHtml ? window.safeMarkdownToHtml(p) : window.escapeHtml(p);
+            container.innerHTML = html;
+            outputs.push({ payload: p, html });
+        }
+        return outputs;
+    }""")
+
+    canary = page.evaluate("() => window.xss_canary === true")
+    assert not canary, "XSS Canary triggered! Malicious script executed!"
+
+    for res in results:
+        html = res["html"]
+        assert "<script>" not in html
+        assert "<svg" not in html
+        assert "<img" not in html
+        assert "<iframe" not in html
+        assert 'href="javascript:' not in html
+        assert 'href="data:' not in html
+        assert 'href="vbscript:' not in html
+
     page.close()

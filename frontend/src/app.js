@@ -1280,6 +1280,7 @@ export function escapeHtml(str) {
 // Expose globals for backward compatibility with automated test harness
 window.escapeHtml = escapeHtml;
 window.navigateTo = navigateTo;
+window.safeMarkdownToHtml = safeMarkdownToHtml;
 
 // -----------------------------------------------------------------------------
 // Initialization
