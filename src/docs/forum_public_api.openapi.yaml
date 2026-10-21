@@ -1,0 +1,2302 @@
+openapi: 3.1.0
+info:
+  title: Forum Platform Public API
+  version: 1.1.0
+  description: >
+    Canonical OpenAPI 3.1 contract for the Forum Platform Public API Gateway.
+    Reconciled in Task 002 with approved architecture decisions DEC-001 through DEC-005.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local API Gateway
+
+tags:
+  - name: Auth
+    description: Authentication, session management, registration, and account recovery
+  - name: Profile
+    description: User profile and credential management
+  - name: Admin Users
+    description: User administration and role management
+  - name: Categories
+    description: Discussion categories
+  - name: Threads
+    description: Forum threads and lifecycle
+  - name: Comments
+    description: Hierarchical thread comments and replies
+  - name: Uploads
+    description: Attachment uploads and media handling
+  - name: Interactions
+    description: Votes, bookmarks, view tracking, and user reputation
+  - name: Reports
+    description: Abuse reports against threads, comments, and accounts
+  - name: Moderation
+    description: Moderation queue, report resolution, and audit logs
+  - name: Notifications
+    description: In-app notifications and preferences
+  - name: Search
+    description: Full-text search and query suggestions
+
+paths:
+  # ===========================================================================
+  # AUTH & SESSION
+  # ===========================================================================
+  /auth/csrf:
+    get:
+      tags: [Auth]
+      summary: Get CSRF token
+      operationId: getCsrfToken
+      responses:
+        '200':
+          description: Synchronizer CSRF token returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [csrf_token]
+                properties:
+                  csrf_token:
+                    type: string
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Start registration and send OTP (DEC-001 neutral response)
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '202':
+          description: Registration pending verification (Neutral response)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationPending'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/register/verify:
+    post:
+      tags: [Auth]
+      summary: Verify registration OTP and create account
+      operationId: verifyRegistrationOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyOtpRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserPublic'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/register/resend-otp:
+    post:
+      tags: [Auth]
+      summary: Resend registration OTP (DEC-001 neutral response)
+      operationId: resendRegistrationOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '202':
+          description: OTP resent if eligible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NeutralAccepted'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and create browser session
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful, sets forum_session cookie
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: forum_session=...; Path=/; HttpOnly; Secure; SameSite=Lax
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke current session
+      operationId: logout
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Session revoked and cookie cleared
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/session:
+    get:
+      tags: [Auth]
+      summary: Get current session and user
+      operationId: getSession
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current authenticated user and session metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/recovery/request:
+    post:
+      tags: [Auth]
+      summary: Request password recovery OTP (DEC-001 neutral response)
+      operationId: requestPasswordRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '202':
+          description: Recovery initiated if account exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NeutralAccepted'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/recovery/verify:
+    post:
+      tags: [Auth]
+      summary: Verify recovery OTP and issue short-lived reset token
+      operationId: verifyPasswordRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyOtpRequest'
+      responses:
+        '200':
+          description: OTP verified, reset token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reset_token, expires_at]
+                properties:
+                  reset_token:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/recovery/reset:
+    post:
+      tags: [Auth]
+      summary: Reset password using reset token
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reset_token, new_password]
+              properties:
+                reset_token:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 8
+      responses:
+        '204':
+          description: Password reset successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ===========================================================================
+  # PROFILE & USERS
+  # ===========================================================================
+  /users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Profile]
+      summary: Get public user profile
+      operationId: getUserProfile
+      responses:
+        '200':
+          description: Public user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPublic'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /profile:
+    get:
+      tags: [Profile]
+      summary: Get own user profile
+      operationId: getOwnProfile
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Own profile details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileOwn'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Profile]
+      summary: Update editable profile fields
+      operationId: updateProfile
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileOwn'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /profile/change-email/request:
+    post:
+      tags: [Profile]
+      summary: Request email change
+      operationId: requestEmailChange
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_email, password]
+              properties:
+                new_email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '202':
+          description: Verification code sent to new email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NeutralAccepted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /profile/change-email/verify:
+    post:
+      tags: [Profile]
+      summary: Verify email change OTP
+      operationId: verifyEmailChange
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp]
+              properties:
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          description: Email changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileOwn'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /profile/change-password:
+    post:
+      tags: [Profile]
+      summary: Change password
+      operationId: changePassword
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 8
+      responses:
+        '204':
+          description: Password changed, other sessions revoked
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/users:
+    get:
+      tags: [Admin Users]
+      summary: List and search users (Admin)
+      operationId: adminListUsers
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [member, moderator, admin]
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: User page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserAdminView'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/users/{user_id}/role:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Admin Users]
+      summary: Change user role (Admin)
+      operationId: adminChangeUserRole
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [member, moderator, admin]
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ===========================================================================
+  # CATEGORIES
+  # ===========================================================================
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List active categories
+      operationId: listCategories
+      responses:
+        '200':
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+
+  /categories/{category_id}:
+    parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Categories]
+      summary: Get category detail
+      operationId: getCategory
+      responses:
+        '200':
+          description: Category detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/categories:
+    post:
+      tags: [Categories]
+      summary: Create category (Admin)
+      operationId: adminCreateCategory
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name:
+                  type: string
+                  maxLength: 80
+                slug:
+                  type: string
+                  maxLength: 100
+                description:
+                  type: string
+                sort_order:
+                  type: integer
+                  default: 0
+      responses:
+        '201':
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/categories/{category_id}:
+    parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Categories]
+      summary: Update category (Admin)
+      operationId: adminUpdateCategory
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 80
+                slug:
+                  type: string
+                  maxLength: 100
+                description:
+                  type: string
+                sort_order:
+                  type: integer
+                is_hidden:
+                  type: boolean
+      responses:
+        '200':
+          description: Category updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ===========================================================================
+  # THREADS
+  # ===========================================================================
+  /threads:
+    get:
+      tags: [Threads]
+      summary: List threads
+      operationId: listThreads
+      parameters:
+        - name: category_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [newest, most_viewed, most_voted]
+            default: newest
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Thread page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadPage'
+    post:
+      tags: [Threads]
+      summary: Create thread
+      operationId: createThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateThreadRequest'
+      responses:
+        '201':
+          description: Thread created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /threads/{thread_id}:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    get:
+      tags: [Threads]
+      summary: Get thread detail
+      operationId: getThread
+      responses:
+        '200':
+          description: Thread detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Threads]
+      summary: Edit own thread
+      operationId: editThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 10
+                  maxLength: 150
+                body:
+                  type: string
+                  minLength: 20
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  maxItems: 5
+      responses:
+        '200':
+          description: Thread updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Threads]
+      summary: Delete own thread when policy permits
+      operationId: deleteThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Thread deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /threads/{thread_id}/lock:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    put:
+      tags: [Threads]
+      summary: Lock or unlock thread (Moderator)
+      operationId: setThreadLock
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_locked]
+              properties:
+                is_locked:
+                  type: boolean
+      responses:
+        '200':
+          description: Thread lock status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /threads/{thread_id}/pin:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    put:
+      tags: [Threads]
+      summary: Pin or unpin thread (Moderator)
+      operationId: setThreadPin
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_pinned]
+              properties:
+                is_pinned:
+                  type: boolean
+      responses:
+        '200':
+          description: Thread pin status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /threads/{thread_id}/best-answer:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    put:
+      tags: [Threads]
+      summary: Set best answer for Q&A thread
+      operationId: setBestAnswer
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [comment_id]
+              properties:
+                comment_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Best answer updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ===========================================================================
+  # COMMENTS
+  # ===========================================================================
+  /threads/{thread_id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    get:
+      tags: [Comments]
+      summary: List comments of a thread
+      operationId: listThreadComments
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Comment page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Comment'
+                  next_cursor:
+                    type: string
+                    nullable: true
+    post:
+      tags: [Comments]
+      summary: Create comment or reply
+      operationId: createComment
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /comments/{comment_id}:
+    parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Comments]
+      summary: Edit own comment
+      operationId: editComment
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Comment edited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    delete:
+      tags: [Comments]
+      summary: Delete comment
+      operationId: deleteComment
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Comment deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ===========================================================================
+  # UPLOADS
+  # ===========================================================================
+  /uploads/images:
+    post:
+      tags: [Uploads]
+      summary: Upload image attachment
+      operationId: uploadImage
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Image uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attachment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: File size exceeds 2 MB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported media type (JPG/PNG/WebP only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ===========================================================================
+  # INTERACTIONS
+  # ===========================================================================
+  /threads/{thread_id}/vote:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    put:
+      tags: [Interactions]
+      summary: Vote on thread
+      operationId: voteThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoteRequest'
+      responses:
+        '200':
+          description: Vote updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /comments/{comment_id}/vote:
+    parameters:
+      - name: comment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Interactions]
+      summary: Vote on comment
+      operationId: voteComment
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoteRequest'
+      responses:
+        '200':
+          description: Vote updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /threads/{thread_id}/bookmark:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    put:
+      tags: [Interactions]
+      summary: Bookmark thread
+      operationId: bookmarkThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: Thread bookmarked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bookmarked]
+                properties:
+                  bookmarked:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Interactions]
+      summary: Remove bookmark
+      operationId: unbookmarkThread
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Bookmark removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /profile/bookmarks:
+    get:
+      tags: [Interactions]
+      summary: List own bookmarked threads
+      operationId: listOwnBookmarks
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Bookmarked threads page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /threads/{thread_id}/view:
+    parameters:
+      - $ref: '#/components/parameters/ThreadId'
+    post:
+      tags: [Interactions]
+      summary: Record thread view (Anti-inflation deduplication)
+      operationId: recordThreadView
+      responses:
+        '204':
+          description: View recorded or deduplicated
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /users/{user_id}/reputation:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Interactions]
+      summary: Get user reputation score
+      operationId: getUserReputation
+      responses:
+        '200':
+          description: User reputation score
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, reputation_score]
+                properties:
+                  user_id:
+                    type: string
+                    format: uuid
+                  reputation_score:
+                    type: integer
+
+  # ===========================================================================
+  # REPORTS & MODERATION (DEC-004)
+  # ===========================================================================
+  /reports:
+    post:
+      tags: [Reports]
+      summary: Report thread, comment, or account (DEC-004)
+      operationId: createReport
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+      responses:
+        '201':
+          description: Report submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /reports/mine:
+    get:
+      tags: [Reports]
+      summary: List own submitted reports
+      operationId: listOwnReports
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: List of user reports
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Report'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /moderation/reports:
+    get:
+      tags: [Moderation]
+      summary: Moderation queue (Moderator)
+      operationId: listModerationReports
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, reviewing, actioned, dismissed]
+        - name: target_type
+          in: query
+          schema:
+            type: string
+            enum: [thread, comment, account]
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Moderation queue items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Report'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /moderation/reports/{report_id}:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Moderation]
+      summary: Get report detail (Moderator)
+      operationId: getModerationReport
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Detailed report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /moderation/reports/{report_id}/actions:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Moderation]
+      summary: Apply moderation action to resolve report (Moderator)
+      operationId: applyReportModerationAction
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModerationActionRequest'
+      responses:
+        '200':
+          description: Moderation action applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationAction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /moderation/actions:
+    get:
+      tags: [Moderation]
+      summary: Audit log of moderation actions (Moderator/Admin)
+      operationId: listModerationActions
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: target_type
+          in: query
+          schema:
+            type: string
+            enum: [thread, comment, account]
+        - name: target_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: moderator_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Audit actions list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModerationAction'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Moderation]
+      summary: Proactive moderation action without report (Moderator)
+      operationId: applyProactiveModerationAction
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProactiveModerationActionRequest'
+      responses:
+        '200':
+          description: Moderation action applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationAction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ===========================================================================
+  # NOTIFICATIONS
+  # ===========================================================================
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List current user's notifications
+      operationId: listNotifications
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Notification page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Get unread notification count
+      operationId: getUnreadCount
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Unread notification count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unread_count]
+                properties:
+                  unread_count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/{notification_id}/read:
+    parameters:
+      - name: notification_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Notifications]
+      summary: Mark notification as read
+      operationId: markNotificationRead
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: Notification marked read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all notifications as read
+      operationId: markAllNotificationsRead
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: All notifications marked as read
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /notifications/preferences:
+    get:
+      tags: [Notifications]
+      summary: Get notification preferences
+      operationId: getNotificationPreferences
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: User notification preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Notifications]
+      summary: Update notification preferences
+      operationId: updateNotificationPreferences
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                in_app_enabled:
+                  type: boolean
+                email_enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: Preferences updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ===========================================================================
+  # SEARCH
+  # ===========================================================================
+  /search:
+    get:
+      tags: [Search]
+      summary: Search visible threads
+      operationId: searchThreads
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: category_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [relevance, newest, most_viewed]
+            default: relevance
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Search results page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchPage'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /search/suggestions:
+    get:
+      tags: [Search]
+      summary: Query search suggestions
+      operationId: searchSuggestions
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+      responses:
+        '200':
+          description: List of suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suggestions]
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      type: string
+
+# =============================================================================
+# COMPONENTS
+# =============================================================================
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: forum_session
+
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+
+  schemas:
+    NeutralAccepted:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          example: accepted
+        message:
+          type: string
+          example: If details are eligible, the request will be processed.
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          pattern: '^[A-Za-z0-9_]{3,32}$'
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+
+    VerifyOtpRequest:
+      type: object
+      required: [email, otp]
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+          pattern: '^[0-9]{6}$'
+
+    RegistrationPending:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          example: pending_verification
+        message:
+          type: string
+          example: If the registration details are eligible, a verification code has been sent.
+
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      required: [user, session]
+      properties:
+        user:
+          $ref: '#/components/schemas/UserPublic'
+        session:
+          type: object
+          required: [idle_expires_at, absolute_expires_at]
+          properties:
+            idle_expires_at:
+              type: string
+              format: date-time
+            absolute_expires_at:
+              type: string
+              format: date-time
+
+    UserPublic:
+      type: object
+      required: [id, username, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [member, moderator, admin]
+
+    UserProfileOwn:
+      type: object
+      required: [id, username, email, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+        bio:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [member, moderator, admin]
+        created_at:
+          type: string
+          format: date-time
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          maxLength: 50
+        bio:
+          type: string
+          maxLength: 200
+
+    UserAdminView:
+      type: object
+      required: [id, username, email, role, is_banned, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [member, moderator, admin]
+        is_banned:
+          type: boolean
+        ban_reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Category:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+          nullable: true
+
+    Thread:
+      type: object
+      required: [id, author_id, category_id, title, body, status, is_pinned, is_locked, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        author_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        body:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [draft, published, hidden, deleted]
+        is_pinned:
+          type: boolean
+        is_locked:
+          type: boolean
+        best_answer_comment_id:
+          type: string
+          format: uuid
+          nullable: true
+        view_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ThreadPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Thread'
+        next_cursor:
+          type: string
+          nullable: true
+
+    CreateThreadRequest:
+      type: object
+      required: [category_id, title, body]
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 10
+          maxLength: 150
+        body:
+          type: string
+          minLength: 20
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 5
+        image_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    CreateCommentRequest:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+        parent_comment_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    Comment:
+      type: object
+      required: [id, thread_id, author_id, body, is_deleted, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        thread_id:
+          type: string
+          format: uuid
+        author_id:
+          type: string
+          format: uuid
+        parent_comment_id:
+          type: string
+          format: uuid
+          nullable: true
+        body:
+          type: string
+        is_deleted:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    Attachment:
+      type: object
+      required: [id, object_key, file_size, mime_type, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        object_key:
+          type: string
+        file_size:
+          type: integer
+        mime_type:
+          type: string
+        status:
+          type: string
+          enum: [pending, linked, orphaned, deleted]
+        created_at:
+          type: string
+          format: date-time
+
+    VoteRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: integer
+          enum: [-1, 1]
+
+    VoteResponse:
+      type: object
+      required: [target_type, target_id, my_vote, score]
+      properties:
+        target_type:
+          type: string
+          enum: [thread, comment]
+        target_id:
+          type: string
+          format: uuid
+        my_vote:
+          type: integer
+          nullable: true
+        score:
+          type: integer
+        reputation_delta:
+          type: integer
+
+    CreateReportRequest:
+      type: object
+      required: [target_type, target_id, reason]
+      properties:
+        target_type:
+          type: string
+          enum: [thread, comment, account]
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [spam, abuse, harassment, wrong_category, misinformation, other]
+        details:
+          type: string
+          maxLength: 1000
+
+    Report:
+      type: object
+      required: [id, target_type, target_id, reason, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        target_type:
+          type: string
+          enum: [thread, comment, account]
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [spam, abuse, harassment, wrong_category, misinformation, other]
+        details:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, reviewing, actioned, dismissed]
+        resolution_note:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ModerationActionRequest:
+      type: object
+      required: [action, reason]
+      properties:
+        action:
+          type: string
+          enum: [pin, lock, move_category, soft_delete, ban, unban, role_change, dismiss_report]
+        reason:
+          type: string
+        metadata:
+          type: object
+
+    ProactiveModerationActionRequest:
+      type: object
+      required: [action, target_type, target_id, reason]
+      properties:
+        action:
+          type: string
+          enum: [pin, lock, move_category, soft_delete, ban, unban, role_change]
+        target_type:
+          type: string
+          enum: [thread, comment, account]
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        metadata:
+          type: object
+
+    ModerationAction:
+      type: object
+      required: [id, moderator_id, action, target_type, target_id, reason, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        report_id:
+          type: string
+          format: uuid
+          nullable: true
+        moderator_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+        target_type:
+          type: string
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationPreferences:
+      type: object
+      required: [in_app_enabled, email_enabled]
+      properties:
+        in_app_enabled:
+          type: boolean
+        email_enabled:
+          type: boolean
+
+    NotificationItem:
+      type: object
+      required: [id, type, title, body, is_read, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        target_type:
+          type: string
+          nullable: true
+        target_id:
+          type: string
+          format: uuid
+          nullable: true
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationItem'
+        next_cursor:
+          type: string
+          nullable: true
+
+    SearchItem:
+      type: object
+      required: [thread_id, title, snippet, category_id, author_id, created_at]
+      properties:
+        thread_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        snippet:
+          type: string
+        category_id:
+          type: string
+          format: uuid
+        author_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    SearchPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchItem'
+        next_cursor:
+          type: string
+          nullable: true
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                required: [field, reason]
+                properties:
+                  field:
+                    type: string
+                  reason:
+                    type: string
+            request_id:
+              type: string
+
+  responses:
+    BadRequest:
+      description: Business rule or request is invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid session
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated but not authorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Resource or state conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Request schema validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Rate limit or cooldown exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

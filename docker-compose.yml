@@ -1,0 +1,258 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: forum_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forum_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forum_dev_password}
+      POSTGRES_DB: forum_users
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_databases.sql:/docker-entrypoint-initdb.d/01_init_databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forum_admin}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forum_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: forum_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - forum_network
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6@sha256:23fe39e81bde596a918000b3135c0f85dc8bb4c9ea6be274b051143f3e300387
+    container_name: forum_mailpit
+    restart: unless-stopped
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:1025
+      MP_UI_BIND_ADDR: 0.0.0.0:8025
+      MP_SMTP_ALLOWED_RECIPIENTS: ${MAILPIT_ALLOWED_RECIPIENTS:-^(developer@example\.test|tester@example\.test)$}
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - forum_network
+
+  user-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_user_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.user.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_users
+      DATABASE_USERS_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_users
+      DATABASE_CONTENT_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_content
+      DATABASE_INTERACTIONS_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_interactions
+      DATABASE_MODERATION_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_moderation
+      DATABASE_NOTIFICATIONS_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_notifications
+      DATABASE_SEARCH_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_search
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8001
+      EMAIL_DELIVERY_BACKEND: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@forumplatform.local}
+      DEV_EMAIL_ALLOWLIST: ${DEV_EMAIL_ALLOWLIST:-developer@example.test,tester@example.test}
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  content-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_content_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.content.app:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_content
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8002
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  interaction-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_interaction_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.interaction.app:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_interactions
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8003
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  moderation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_moderation_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.moderation.app:app", "--host", "0.0.0.0", "--port", "8004"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_moderation
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8004
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_notification_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.notification.app:app", "--host", "0.0.0.0", "--port", "8005"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_notifications
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8005
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  search-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_search_service
+    restart: unless-stopped
+    command: ["uvicorn", "src.services.search.app:app", "--host", "0.0.0.0", "--port", "8006"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_search
+      REDIS_URL: redis://redis:6379/0
+      PORT: 8006
+    ports:
+      - "8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forum_api_gateway
+    restart: unless-stopped
+    command: ["uvicorn", "src.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PORT: 8000
+      USER_SERVICE_URL: http://user-service:8001
+      CONTENT_SERVICE_URL: http://content-service:8002
+      INTERACTION_SERVICE_URL: http://interaction-service:8003
+      MODERATION_SERVICE_URL: http://moderation-service:8004
+      NOTIFICATION_SERVICE_URL: http://notification-service:8005
+      SEARCH_SERVICE_URL: http://search-service:8006
+    ports:
+      - "8000:8000"
+    depends_on:
+      user-service:
+        condition: service_healthy
+      content-service:
+        condition: service_healthy
+      interaction-service:
+        condition: service_healthy
+      moderation-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forum_network
+
+networks:
+  forum_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

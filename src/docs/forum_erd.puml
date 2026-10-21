@@ -1,0 +1,331 @@
+@startuml Forum_Platform_ERD
+' ERD logical view derived from forum_postgres_erd.sql (Task 002 Reconciled Baseline)
+' Service-owned databases/schemas are strictly isolated without cross-service FKs (DEC-002).
+hide methods
+hide stereotypes
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #44546A
+  ArrowColor #44546A
+}
+
+package "users schema / User Service (forum_users)" {
+  entity "accounts" as accounts {
+    * id : UUID <<PK>>
+    --
+    username : VARCHAR(32)
+    username_normalized : VARCHAR(32) <<UQ>>
+    display_name : VARCHAR(50)
+    email : VARCHAR(254)
+    email_normalized : VARCHAR(254) <<UQ>>
+    password_hash : TEXT
+    role : account_role
+    is_banned : BOOLEAN
+    ban_reason : TEXT
+    banned_until : TIMESTAMPTZ
+    bio : VARCHAR(200)
+    avatar_object_key : TEXT
+    email_verified_at : TIMESTAMPTZ
+    password_changed_at : TIMESTAMPTZ
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+  }
+
+  entity "pending_registrations" as pending_registrations {
+    * id : UUID <<PK>>
+    --
+    username : VARCHAR(32)
+    username_normalized : VARCHAR(32)
+    email : VARCHAR(254)
+    email_normalized : VARCHAR(254)
+    password_hash : TEXT
+    otp_hash : TEXT
+    otp_expires_at : TIMESTAMPTZ
+    otp_attempts : SMALLINT
+    resend_count : SMALLINT
+    resend_available_at : TIMESTAMPTZ
+    status : registration_status
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+  }
+
+  entity "one_time_tokens" as one_time_tokens {
+    * id : UUID <<PK>>
+    --
+    account_id : UUID <<FK>>
+    purpose : otp_purpose
+    token_hash : TEXT
+    expires_at : TIMESTAMPTZ
+    attempts : SMALLINT
+    resend_count : SMALLINT
+    resend_after : TIMESTAMPTZ
+    consumed_at : TIMESTAMPTZ
+    created_at : TIMESTAMPTZ
+  }
+
+  entity "sessions" as sessions {
+    * id : UUID <<PK>>
+    --
+    account_id : UUID <<FK>>
+    session_token_hash : TEXT <<UQ>>
+    created_at : TIMESTAMPTZ
+    last_seen_at : TIMESTAMPTZ
+    idle_expires_at : TIMESTAMPTZ
+    absolute_expires_at : TIMESTAMPTZ
+    revoked_at : TIMESTAMPTZ
+    revocation_reason : session_revocation_reason
+    user_agent : TEXT
+    ip_address : INET
+  }
+
+  entity "password_history" as password_history {
+    * id : BIGINT <<PK>>
+    --
+    account_id : UUID <<FK>>
+    password_hash : TEXT
+    created_at : TIMESTAMPTZ
+  }
+
+  entity "email_change_requests" as email_change_requests {
+    * id : UUID <<PK>>
+    --
+    account_id : UUID <<FK>>
+    new_email : VARCHAR(254)
+    new_email_normalized : VARCHAR(254)
+    otp_hash : TEXT
+    expires_at : TIMESTAMPTZ
+    attempts : SMALLINT
+    created_at : TIMESTAMPTZ
+    verified_at : TIMESTAMPTZ
+    completed_at : TIMESTAMPTZ
+  }
+}
+
+package "content schema / Content Service (forum_content)" {
+  entity "categories" as categories {
+    * id : UUID <<PK>>
+    --
+    name : VARCHAR(80)
+    slug : VARCHAR(100) <<UQ>>
+    description : TEXT
+    sort_order : INTEGER
+    is_hidden : BOOLEAN
+    created_by : UUID
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+  }
+
+  entity "threads" as threads {
+    * id : UUID <<PK>>
+    --
+    category_id : UUID <<FK>>
+    author_id : UUID
+    title : VARCHAR(150)
+    body : TEXT
+    status : VARCHAR(16)
+    is_pinned : BOOLEAN
+    is_locked : BOOLEAN
+    best_answer_comment_id : UUID <<FK, nullable>>
+    view_count : BIGINT
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+    edited_at : TIMESTAMPTZ
+  }
+
+  entity "thread_tags" as thread_tags {
+    * id : UUID <<PK>>
+    --
+    thread_id : UUID <<FK>>
+    tag : VARCHAR(40)
+    tag_normalized : VARCHAR(40)
+    created_at : TIMESTAMPTZ
+    --
+    UNIQUE(thread_id, tag_normalized)
+  }
+
+  entity "comments" as comments {
+    * id : UUID <<PK>>
+    --
+    thread_id : UUID <<FK>>
+    author_id : UUID
+    parent_comment_id : UUID <<FK, nullable>>
+    body : TEXT
+    is_deleted : BOOLEAN
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+    edited_at : TIMESTAMPTZ
+  }
+
+  entity "attachments" as attachments {
+    * id : UUID <<PK>>
+    --
+    thread_id : UUID <<FK, nullable>>
+    author_id : UUID
+    object_key : TEXT <<UQ>>
+    file_size : INTEGER
+    mime_type : VARCHAR(32)
+    status : attachment_status
+    created_at : TIMESTAMPTZ
+    linked_at : TIMESTAMPTZ
+  }
+}
+
+package "interactions schema / Interaction Service (forum_interactions)" {
+  entity "votes" as votes {
+    * id : UUID <<PK>>
+    --
+    voter_id : UUID
+    target_type : target_type
+    thread_id : UUID
+    comment_id : UUID
+    value : SMALLINT
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+  }
+
+  entity "bookmarks" as bookmarks {
+    * id : UUID <<PK>>
+    --
+    user_id : UUID
+    thread_id : UUID
+    created_at : TIMESTAMPTZ
+  }
+
+  entity "thread_views" as thread_views {
+    * id : BIGINT <<PK>>
+    --
+    thread_id : UUID
+    session_key_hash : TEXT
+    viewed_at : TIMESTAMPTZ
+  }
+
+  entity "reputation_ledger" as reputation_ledger {
+    * id : BIGINT <<PK>>
+    --
+    user_id : UUID
+    source_type : target_type
+    source_id : UUID
+    caused_by_user_id : UUID
+    delta : INTEGER
+    reason : VARCHAR(40)
+    created_at : TIMESTAMPTZ
+  }
+}
+
+package "moderation schema / Moderation Service (forum_moderation)" {
+  entity "reports" as reports {
+    * id : UUID <<PK>>
+    --
+    reporter_id : UUID
+    target_type : target_type
+    thread_id : UUID
+    comment_id : UUID
+    reported_account_id : UUID
+    reason : report_reason
+    details : TEXT
+    status : report_status
+    assigned_to : UUID
+    resolution_note : TEXT
+    created_at : TIMESTAMPTZ
+    updated_at : TIMESTAMPTZ
+    resolved_at : TIMESTAMPTZ
+  }
+
+  entity "actions" as actions {
+    * id : UUID <<PK>>
+    --
+    report_id : UUID <<FK, nullable>>
+    moderator_id : UUID
+    action : action_type
+    target_type : target_type
+    target_id : UUID
+    reason : TEXT
+    metadata : JSONB
+    created_at : TIMESTAMPTZ
+  }
+}
+
+package "notifications schema / Notification Service (forum_notifications)" {
+  entity "preferences" as notification_preferences {
+    * user_id : UUID <<PK>>
+    --
+    in_app_enabled : BOOLEAN
+    email_enabled : BOOLEAN
+    updated_at : TIMESTAMPTZ
+  }
+
+  entity "items" as notification_items {
+    * id : UUID <<PK>>
+    --
+    recipient_id : UUID
+    actor_id : UUID
+    type : notification_type
+    title : VARCHAR(160)
+    body : TEXT
+    target_type : VARCHAR(24)
+    target_id : UUID
+    is_read : BOOLEAN
+    created_at : TIMESTAMPTZ
+    read_at : TIMESTAMPTZ
+  }
+}
+
+package "search schema / Search Service (forum_search)" {
+  entity "documents" as search_documents {
+    * id : UUID <<PK>>
+    --
+    source_type : VARCHAR(24)
+    source_id : UUID
+    title : TEXT
+    body : TEXT
+    author_id : UUID
+    category_id : UUID
+    search_vector : TSVECTOR <<generated>>
+    source_updated_at : TIMESTAMPTZ
+    indexed_at : TIMESTAMPTZ
+  }
+}
+
+' Intra-service foreign-key relationships ONLY (DEC-002: no cross-service FKs)
+accounts ||--o{ one_time_tokens : account_id
+accounts ||--o{ sessions : account_id
+accounts ||--o{ password_history : account_id
+accounts ||--o{ email_change_requests : account_id
+
+categories ||--o{ threads : category_id
+threads ||--o{ thread_tags : thread_id
+threads ||--o{ comments : thread_id
+threads ||--o{ attachments : thread_id
+comments |o--o{ comments : parent_comment_id
+comments |o--o{ threads : best_answer_comment_id
+
+reports |o--o{ actions : report_id
+
+note bottom of accounts
+  DEC-002: UUID references from other service databases (author_id, voter_id,
+  reporter_id, recipient_id, target_id, etc.) are logical references only.
+  Physical cross-service foreign keys are strictly prohibited.
+end note
+
+note bottom of votes
+  CHECK constraint requires exactly one target:
+  (thread_id IS NOT NULL XOR comment_id IS NOT NULL).
+  UNIQUE constraints prevent duplicate votes.
+  Value is SMALLINT (-1 or +1).
+end note
+
+note bottom of comments
+  Trigger validates that a reply belongs to the same thread
+  and that comments are limited to two levels.
+end note
+
+note bottom of reports
+  DEC-004: Supports reporting threads, comments, and user accounts.
+  Partial unique indexes prevent duplicate active reports for the same target.
+  Audit actions link optionally to reports via report_id.
+end note
+
+@enduml

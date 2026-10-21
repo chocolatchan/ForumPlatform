@@ -1,0 +1,37 @@
+# Task 002: Change Log - Specification Reconciliation & Infrastructure Baseline
+
+**Date:** 2026-10-20  
+**Scope:** Architecture baseline reconciliation, database DDL/ERD decoupling, OpenAPI expansion, diagram updates, and infrastructure initialization.
+
+---
+
+## 1. Summary of Changes
+
+All 8 primary artifacts and project configurations identified during Task 001 were reconciled against approved decisions **DEC-001** through **DEC-005**.
+
+| File | Change Category | Key Modifications | Rationale |
+|---|---|---|---|
+| `src/docs/forum_architecture_decisions_mvp.md` | Architecture / ADR | - Formally recorded approved decisions DEC-001 through DEC-005 in Section 1.<br>- Updated ADR table: ADR-001/013 superseded by DEC-002; ADR-005 by DEC-001; ADR-007 by DEC-003; ADR-010 by DEC-004; ADR-016 by DEC-005.<br>- Added `forum_users`, `forum_content`, `forum_interactions`, `forum_moderation`, `forum_notifications`, `forum_search` database mappings. | Establish immutable, approved architectural decisions as the source of truth before code implementation. |
+| `src/docs/forum_postgres_erd.sql` | Database DDL | - Removed all 6 cross-schema physical foreign keys in `interactions` and `moderation` schemas referencing `content`.<br>- Updated `content.threads.status` constraint to `('draft', 'published', 'hidden', 'deleted')`.<br>- Updated `moderation.report_status` to `('pending', 'reviewing', 'actioned', 'dismissed')`.<br>- Updated `moderation.report_reason` to `('spam', 'abuse', 'harassment', 'wrong_category', 'misinformation', 'other')`.<br>- Updated `moderation.action_type` to include `dismiss_report`.<br>- Added optional `report_id UUID` linking `moderation.actions` to `moderation.reports`.<br>- Added `content.attachments` table with size/MIME constraints and orphan indexes.<br>- Added `display_name VARCHAR(50)` to `users.accounts`.<br>- Changed `interactions.votes.value` to `SMALLINT NOT NULL CHECK (value IN (-1, 1))`.<br>- Added `outbox_events` tables across producing schemas. | Strict adherence to DEC-002 (service data autonomy), DEC-003 (thread lifecycle), DEC-004 (account reporting), and DEC-005 (outbox propagation). |
+| `src/docs/forum_erd.puml` | Database ERD | - Synchronized entities with reconciled DDL.<br>- Added `attachments` entity and `display_name` attribute.<br>- Removed physical cross-schema relationship connectors, replacing them with clear logical reference notes.<br>- Updated enums and cardinality. | Provide visual alignment with the decoupled microservice persistence model. |
+| `src/docs/forum_api_contract.md` | API Contract | - Applied DEC-001: Neutral `202 Accepted` on `POST /auth/register` and recovery.<br>- Added `GET /auth/csrf` to User Service table.<br>- Added `BestAnswerChanged` and `ThreadViewCountIncremented` to Event Contract table.<br>- Standardized `VerifyOtpRequest` schema on `{ email, otp }`.<br>- Reconciled moderation endpoints to support both report resolution and proactive actions. | Align canonical API contract with approved decisions and outbox events. |
+| `src/docs/forum_public_api.openapi.yaml` | OpenAPI Specification | - Expanded paths from 16 to 48 operations, covering all 38 contract endpoints + administrative sub-actions.<br>- Implemented DEC-001 neutral 202 responses for registration and recovery.<br>- Implemented DEC-003 `Thread` schema with status enum and boolean flags.<br>- Implemented DEC-004 `CreateReportRequest` supporting `account`, `thread`, and `comment`.<br>- Added `GET /auth/csrf` and enforced `CsrfToken` parameter across all mutating session endpoints (including logout).<br>- Added `POST /uploads/images` with multipart/form-data schema.<br>- Added all missing moderation queue, user admin, and notification preference paths. | Provide a 100% complete, fully resolvable OpenAPI 3.1 gateway contract for contract-first testing and client generation. |
+| `src/docs/forum_dynamic_diagrams.puml` | Sequence Diagrams | - Sequence 01: Updated registration flow to reflect DEC-001 neutral 202 response.<br>- Sequence 03: Updated thread creation to link attachments and use DEC-003 flags.<br>- Sequence 05: Replaced deprecated `POST /votes` with `PUT /threads/{id}/vote`, and redirected `ReputationChanged` event to User Service.<br>- Sequence 06: Updated abuse reporting to support account targets and `report_id` correlation.<br>- Sequence 08: Added dedicated view count tracking and propagation sequence (DEC-005). | Keep dynamic sequence interactions consistent with canonical REST paths and DEC-001..DEC-005. |
+| `src/docs/forum_activity_diagrams.puml` | Activity Diagrams | - Activity 01: Updated to show neutral 202 flow without credential enumeration.<br>- Activity 03: Added attachment verification step.<br>- Activity 05: Updated vote value logic to +1/-1 and verified outbox events.<br>- Activity 06: Added account reporting and moderator resolution with report correlation.<br>- Activity 08: Added dedicated activity diagram for view count deduplication and outbox increment. | Ensure algorithmic and business logic flows reflect all approved rules. |
+| `src/docs/BPMN.md` | Business Process Docs | - Replaced 0-byte file with explicit status documentation.<br>- Documented decision to defer executable BPMN 2.0 XML runtime to MVP+.<br>- Provided full business process mapping matrix (BP-01 to BP-08) pointing to validated PlantUML activity diagrams. | Eliminate documentation ambiguity and clarify process modeling roadmap. |
+| `pyproject.toml` | Project Infrastructure | - Populated build system (`hatchling`), project metadata, Python version (`>=3.12`), and core dependencies (FastAPI, Pydantic, SQLAlchemy, asyncpg, alembic, argon2-cffi, redis, python-multipart, httpx).<br>- Added dev tools config (Ruff, Pytest, Pyright). | Enable reproducible dependency installation and testing. |
+| `docker-compose.yml` | Container Infrastructure | - Defined `postgres:16-alpine` and `redis:7-alpine` services with healthchecks and persistent volumes.<br>- Mounted `scripts/init_databases.sql` to initialize all 6 service databases automatically. | Provision local PostgreSQL 16 and Redis development environment matching DEC-002. |
+| `scripts/init_databases.sql` | Database Initialization | - SQL script creating `forum_users`, `forum_content`, `forum_interactions`, `forum_moderation`, `forum_notifications`, and `forum_search`. | Ensure single-cluster development cleanly provisions isolated logical databases. |
+| `.env.example` | Configuration | - Added complete template with connection URLs for all 6 service databases, Redis, sessions, storage, and security.<br>- Ensured 100% placeholder hygiene (zero real secrets). | Standardize environment variable configuration across developers and CI. |
+| `pyrightconfig.yml` | Type Checking | - Configured basic Pyright type checking for `src/`. | Enable static type validation. |
+| `README.md` | Documentation | - Replaced placeholder with architecture overview, local setup guide, and validation commands. | Provide clear onboarding and validation instructions. |
+
+---
+
+## 2. Integrity Verification
+
+All modified files were validated using automated checks in `scratch/task_002_verification.py`:
+- **OpenAPI 3.1:** 48 paths, 30 schemas, 100% internal `$ref` resolution, zero parameter errors.
+- **SQL DDL:** 0 cross-schema physical FKs, all check constraints and enums match DEC-001..DEC-005.
+- **PlantUML:** All 3 files contain balanced, syntactically valid blocks with zero deprecated routes.
+- **Configuration:** `.env.example` verified free of credentials or tokens.

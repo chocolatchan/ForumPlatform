@@ -1,0 +1,390 @@
+@startuml Forum_Sequence_01_Registration_OTP
+title Forum Platform - Sequence Diagram 01: Registration with OTP (DEC-001 Reconciled)
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Guest
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+database "User DB" as UDB
+queue "Email Provider" as MAIL
+
+Guest -> FE: Enter username, email, password
+FE -> GW: POST /auth/register
+GW -> US: Forward registration request
+US -> UDB: Check username/email uniqueness
+UDB --> US: Check result
+
+alt Username or email already registered (DEC-001 Neutral Handling)
+  US ->> MAIL: Send notification email ("Account already exists / Reset password link")
+  US --> GW: 202 Accepted (Neutral response)
+  GW --> FE: 202 Accepted ("If eligible, a verification code has been sent")
+  FE --> Guest: Show OTP entry screen with generic guidance
+else Username and email available
+  US -> US: Hash password\nGenerate OTP and expiry (5 min)
+  US -> UDB: Save pending registration + OTP hash
+  UDB --> US: Saved
+  US ->> MAIL: Send OTP verification email
+  MAIL --> US: Accepted / delivery status
+  US --> GW: 202 Accepted (Neutral response)
+  GW --> FE: 202 Accepted ("If eligible, a verification code has been sent")
+  FE --> Guest: Show OTP entry screen
+end
+
+Guest -> FE: Enter OTP
+FE -> GW: POST /auth/register/verify
+GW -> US: Forward OTP verification {email, otp}
+US -> UDB: Load pending registration by email
+UDB --> US: OTP hash, expiry, attempts, resend count
+
+alt OTP is valid and not expired
+  US -> UDB: Create account + consume pending registration
+  UDB --> US: Account created
+  US --> GW: 201 Created + UserPublic
+  GW --> FE: Success
+  FE --> Guest: Show registration confirmation / prompt to sign in
+else OTP is incorrect
+  US -> UDB: Increment failed attempts counter
+  US --> GW: 400 Invalid OTP
+  GW --> FE: Verification failed
+  FE --> Guest: Show OTP error; retain email
+else OTP expired or attempt limit reached
+  US --> GW: 400 OTP expired or limit exceeded
+  GW --> FE: Verification locked
+  FE --> Guest: Offer resend OTP or restart registration
+end
+@enduml
+
+@startuml Forum_Sequence_02_Login_Session
+title Forum Platform - Sequence Diagram 02: Login and Session Creation
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor "Guest / Member" as User
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+database "User DB" as UDB
+database "Redis / Rate Limiter" as RL
+
+User -> FE: Submit login (username/email) + password
+FE -> GW: POST /auth/login
+GW -> RL: Check rate limit / failure counters
+RL --> GW: Allowed or blocked
+
+alt Rate limit exceeded
+  GW --> FE: 429 Too Many Requests
+  FE --> User: Show retry guidance / CAPTCHA if required
+else Request allowed
+  GW -> US: Forward login request
+  US -> UDB: Find account by normalized login
+  UDB --> US: Account status + password hash
+
+  alt Account missing or password invalid
+    US -> RL: Record failed login attempt
+    US --> GW: 401 Invalid credentials (generic)
+    GW --> FE: Login failed
+    FE --> User: Show generic credential error
+  else Account is banned
+    US --> GW: 403 Account restricted
+    GW --> FE: Login denied
+    FE --> User: Show ban reason and duration
+  else Credentials valid and account active
+    US -> US: Generate opaque session token
+    US -> UDB: Persist session (idle 4h, absolute 24h)
+    UDB --> US: Session saved
+    US --> GW: 200 OK + Set-Cookie: forum_session
+    GW --> FE: Set-Cookie: HttpOnly; Secure; SameSite=Lax; Path=/
+    FE --> User: Navigate to forum dashboard
+  end
+end
+@enduml
+
+@startuml Forum_Sequence_03_Create_Thread
+title Forum Platform - Sequence Diagram 03: Create Thread (DEC-003 Reconciled)
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Member
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+control "Content Service" as CS
+database "User DB" as UDB
+database "Content DB" as CDB
+control "Notification Service" as NS
+control "Search Service" as SS
+queue "Event Bus / Outbox" as BUS
+
+Member -> FE: Submit title, body, category, tags, optional image_ids
+FE -> GW: POST /threads + session cookie + X-CSRF-Token + Idempotency-Key
+GW -> US: Validate session and member permissions
+US -> UDB: Check session validity and ban status
+UDB --> US: Valid member
+US --> GW: Auth context (user_id, role)
+
+alt Unauthenticated or restricted
+  GW --> FE: 401 / 403
+  FE --> Member: Show error
+else Authenticated
+  GW -> CS: Create thread command
+  CS -> CS: Validate title, body, tag limit\nVerify image_ids in attachments table
+  CS -> CDB: Insert thread (status='published', is_locked=false, is_pinned=false)\nLink attachments + Write ThreadCreated outbox event
+  CDB --> CS: Committed with Thread ID
+  CS --> GW: 201 Created + Thread schema
+  GW --> FE: Thread created
+  FE --> Member: Display new thread
+
+  BUS -> SS: ThreadCreated event
+  SS -> SS: Index thread in search documents
+  BUS -> NS: ThreadCreated event
+  NS -> NS: Notify subscribed category members
+end
+@enduml
+
+@startuml Forum_Sequence_04_Comment_And_Notification
+title Forum Platform - Sequence Diagram 04: Add Comment / Reply
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Member
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+control "Content Service" as CS
+database "Content DB" as CDB
+control "Notification Service" as NS
+queue "Event Bus / Outbox" as BUS
+
+Member -> FE: Submit comment or reply
+FE -> GW: POST /threads/{id}/comments + cookie + CSRF + Idempotency-Key
+GW -> US: Validate session
+US --> GW: Auth context
+
+alt Authenticated
+  GW -> CS: Create comment command
+  CS -> CDB: Check thread is open (is_locked=false)\nVerify parent depth (max 2 levels)
+  CDB --> CS: Preconditions pass
+  CS -> CDB: Insert comment + Write CommentCreated outbox event
+  CDB --> CS: Committed
+  CS --> GW: 201 Created + Comment schema
+  GW --> FE: Comment created
+  FE --> Member: Display new comment
+
+  BUS -> NS: CommentCreated event
+  NS -> NS: Create in-app notification for thread author / replier
+end
+@enduml
+
+@startuml Forum_Sequence_05_Vote_BestAnswer
+title Forum Platform - Sequence Diagram 05: Vote and Mark Best Answer (DEC-002 Reconciled)
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Member
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+control "Interaction Service" as IS
+control "Content Service" as CS
+database "Interaction DB" as IDB
+database "User DB" as UDB
+database "Content DB" as CDB
+queue "Event Bus / Outbox" as BUS
+
+Member -> FE: Click upvote/downvote
+FE -> GW: PUT /threads/{id}/vote (or /comments/{id}/vote) + CSRF
+GW -> US: Validate session
+US --> GW: Auth context (voter_id)
+
+alt Authenticated
+  GW -> IS: Submit vote (value: 1 or -1)
+  IS -> CS: Internal REST: Get target author and state
+  CS --> IS: Target metadata (author_id, is_active)
+
+  alt Self-vote attempted
+    IS --> GW: 400 SELF_VOTE_NOT_ALLOWED
+    GW --> FE: Error
+  else Valid vote
+    IS -> IDB: Upsert vote or cancel if same value\nWrite reputation ledger entry + outbox
+    IDB --> IS: Committed
+    IS --> GW: 200 OK + VoteResponse (score, my_vote, delta)
+    GW --> FE: Updated score
+    FE --> Member: Reflect vote state
+
+    BUS -> US: ReputationChanged event
+    US -> UDB: Update cached user reputation if applicable
+  end
+end
+
+== Mark Best Answer ==
+Member -> FE: Select Best Answer
+FE -> GW: PUT /threads/{id}/best-answer + CSRF
+GW -> US: Validate session
+US --> GW: Auth context
+GW -> CS: Set best answer {comment_id}
+CS -> CDB: Verify requester is author, category is Q&A, thread not locked
+CDB --> CS: Preconditions pass
+CS -> CDB: Set best_answer_comment_id + Write BestAnswerChanged outbox event
+CDB --> CS: Committed
+CS --> GW: 200 OK
+GW --> FE: Best answer marked
+FE --> Member: Highlight best answer
+
+BUS -> IS: BestAnswerChanged event
+IS -> IDB: Award reputation bonus to comment author in ledger
+@enduml
+
+@startuml Forum_Sequence_06_Report_Moderation
+title Forum Platform - Sequence Diagram 06: Abuse Report and Moderation (DEC-004 Reconciled)
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Member
+actor Moderator
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "User Service" as US
+control "Moderation Service" as MS
+control "Content Service" as CS
+database "Moderation DB" as MDB
+database "Content DB" as CDB
+database "User DB" as UDB
+queue "Event Bus / Outbox" as BUS
+
+Member -> FE: Submit report (target: thread/comment/account, reason, details)
+FE -> GW: POST /reports + CSRF + Idempotency-Key
+GW -> US: Validate session
+US --> GW: Auth context (reporter_id)
+
+alt Authenticated
+  GW -> MS: Create report
+  MS -> MDB: Check active report duplicate for reporter & target
+  MDB --> MS: Check result
+
+  alt Already reported
+    MS --> GW: 409 DUPLICATE_REPORT
+    GW --> FE: Already reported
+  else New report
+    MS -> MDB: Insert report (status='pending')
+    MDB --> MS: Report ID
+    MS --> GW: 201 Created + Report schema
+    GW --> FE: Confirmation
+    FE --> Member: Show submission confirmation
+  end
+end
+
+== Moderator Resolves Report ==
+Moderator -> FE: Review report in queue
+FE -> GW: GET /moderation/reports?status=pending
+GW -> US: Verify moderator role
+US --> GW: Authorized
+GW -> MS: Fetch queue
+MS -> MDB: Query reports
+MDB --> MS: Queue items
+MS --> GW: 200 OK
+GW --> FE: Display queue
+
+Moderator -> FE: Apply action (e.g. lock_thread, ban_user)
+FE -> GW: POST /moderation/reports/{report_id}/actions + CSRF
+GW -> MS: Execute moderation action
+MS -> MDB: Save action (with report_id) + update report (status='actioned')
+MDB --> MS: Committed
+
+alt Content Action (lock/hidden/deleted)
+  MS -> CS: Internal REST / Event: Update thread status or is_locked
+  CS -> CDB: Apply content update
+end
+
+alt Account Action (ban user)
+  MS -> US: Internal REST / Event: Ban account and revoke sessions
+  US -> UDB: Set is_banned=true, revoke sessions
+end
+
+MS -> BUS: ModerationActionApplied event
+MS --> GW: 200 OK + ModerationAction schema
+GW --> FE: Action completed
+FE --> Moderator: Show resolution confirmation
+@enduml
+
+@startuml Forum_Sequence_07_Search
+title Forum Platform - Sequence Diagram 07: Search Visible Threads
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Visitor
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "Search Service" as SS
+database "Search DB" as SDB
+
+Visitor -> FE: Enter search query & filters
+FE -> GW: GET /search?q=...&category_id=...&sort=...
+GW -> SS: Forward search request
+SS -> SS: Validate & normalize query
+SS -> SDB: Full-text search with tsvector simple ranking
+SDB --> SS: Matching documents
+SS --> GW: 200 OK + SearchPage
+GW --> FE: Results + next_cursor
+FE --> Visitor: Render search results
+@enduml
+
+@startuml Forum_Sequence_08_View_Count_Propagation
+title Forum Platform - Sequence Diagram 08: View Count Tracking & Propagation (DEC-005)
+autonumber
+hide footbox
+skinparam style strictuml
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Visitor
+boundary "Web Frontend" as FE
+control "API Gateway" as GW
+control "Interaction Service" as IS
+database "Interaction DB" as IDB
+control "Content Service" as CS
+database "Content DB" as CDB
+queue "Event Bus / Outbox" as BUS
+
+Visitor -> FE: Open thread page
+FE -> GW: POST /threads/{thread_id}/view (Session or IP HMAC)
+GW -> IS: Record thread view
+IS -> IDB: Check session_key_hash in 30-minute deduplication window
+IDB --> IS: Window check result
+
+alt Already viewed in last 30 minutes
+  IS --> GW: 204 No Content (Deduplicated)
+  GW --> FE: 204 No Content
+else First view in window
+  IS -> IDB: Insert thread_views record\nWrite ThreadViewCountIncremented to outbox
+  IDB --> IS: Committed
+  IS --> GW: 204 No Content
+  GW --> FE: 204 No Content
+
+  BUS -> CS: ThreadViewCountIncremented event {thread_id, increment: 1}
+  CS -> CDB: UPDATE content.threads SET view_count = view_count + 1 WHERE id = thread_id
+  CDB --> CS: Updated
+end
+@enduml

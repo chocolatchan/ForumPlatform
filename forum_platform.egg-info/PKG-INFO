@@ -1,0 +1,112 @@
+Metadata-Version: 2.4
+Name: forum-platform
+Version: 0.1.0
+Summary: Modern microservice forum platform backend built with FastAPI, SQLAlchemy, and PostgreSQL.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: pydantic>=2.9.0
+Requires-Dist: pydantic-settings>=2.5.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: sqlalchemy>=2.0.35
+Requires-Dist: asyncpg>=0.29.0
+Requires-Dist: alembic>=1.13.0
+Requires-Dist: argon2-cffi>=23.1.0
+Requires-Dist: pyjwt>=2.9.0
+Requires-Dist: redis>=5.0.0
+Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: httpx>=0.27.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
+Requires-Dist: ruff>=0.6.0; extra == "dev"
+Requires-Dist: pyright>=1.1.380; extra == "dev"
+Requires-Dist: pyyaml>=6.0.2; extra == "dev"
+
+# Forum Platform
+
+A modern, microservice-architected forum backend platform built with **FastAPI**, **Pydantic v2**, **SQLAlchemy**, and **PostgreSQL 16+**.
+
+---
+
+## Architecture Overview
+
+The system consists of an **API Gateway** and six independent logical services:
+1. **User Service** (`forum_users`): Account lifecycle, Argon2id credentials, OTPs, and server-side sessions.
+2. **Content Service** (`forum_content`): Categories, threads, hierarchical comments (max 2 levels), and image attachments.
+3. **Interaction Service** (`forum_interactions`): Voting (+1/-1), bookmarking, view deduplication (30m window), and reputation ledger.
+4. **Moderation Service** (`forum_moderation`): Abuse reports (threads, comments, accounts), moderation queue, and audit actions.
+5. **Notification Service** (`forum_notifications`): In-app notifications, unread counts, and user preferences.
+6. **Search Service** (`forum_search`): Full-text search and query suggestions using PostgreSQL `tsvector`.
+
+Architecture decisions and specifications:
+- [Architecture Decision Records (MVP)](src/docs/forum_architecture_decisions_mvp.md)
+- [API Contract Specification](src/docs/forum_api_contract.md)
+- [Canonical OpenAPI 3.1 Spec](src/docs/forum_public_api.openapi.yaml)
+- [PostgreSQL ERD DDL](src/docs/forum_postgres_erd.sql)
+- [Entity-Relationship Diagram](src/docs/forum_erd.puml)
+- [Sequence Diagrams](src/docs/forum_dynamic_diagrams.puml)
+- [Activity Diagrams](src/docs/forum_activity_diagrams.puml)
+- [BPMN Scope Status](src/docs/BPMN.md)
+- [Audit & Readiness Reports](docs/audit/)
+
+---
+
+## Local Development Setup
+
+### 1. Prerequisites
+- **Python:** 3.12 or newer
+- **Docker & Docker Compose:** for local PostgreSQL 16 and Redis 7
+- **Git**
+
+### 2. Environment Configuration
+Create your local environment file from the template:
+```bash
+cp .env.example .env
+```
+*(Review `.env` to customize local ports or secret keys as needed.)*
+
+### 3. Start Local Infrastructure
+Launch PostgreSQL and Redis containers with automatic 6-database provisioning:
+```bash
+docker compose up -d
+```
+Verify containers are healthy:
+```bash
+docker compose ps
+```
+
+### 4. Python Environment & Dependencies
+Initialize and activate your Python virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -e ".[dev]"
+```
+
+---
+
+## Validation & Quality Commands
+
+### OpenAPI Specification Validation
+Validate OpenAPI 3.1 schema references and path integrity:
+```bash
+python3 -c "import yaml; spec = yaml.safe_load(open('src/docs/forum_public_api.openapi.yaml')); print(f'Parsed {len(spec[\"paths\"])} paths successfully.')"
+```
+
+### Type Checking & Linting
+```bash
+# Type check with Pyright
+pyright
+
+# Lint code with Ruff
+ruff check .
+
+# Format code with Ruff
+ruff format --check .
+```
+
+### Automated Tests
+```bash
+pytest
+```

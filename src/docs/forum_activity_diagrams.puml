@@ -1,0 +1,333 @@
+@startuml Forum_Activity_01_Registration_OTP
+title Forum Platform - Activity Diagram 01: Registration with OTP (DEC-001 Reconciled)
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Guest opens registration page;
+:Enter username, email, password;
+:Submit registration form;
+
+:Validate required fields and password policy;
+if (Input valid?) then (Yes)
+  :Check username and email uniqueness;
+  if (Account or email already registered?) then (Yes)
+    :Send notification email\n("Account already exists / Reset password link");
+    :Return neutral 202 Accepted;
+    :Display OTP entry / check email prompt;
+    stop
+  else (No)
+    :Hash password with Argon2id;
+    :Generate 6-digit OTP and 5-minute expiry;
+    :Save pending registration and OTP hash;
+    :Send verification OTP email;
+    :Return neutral 202 Accepted;
+    :Display OTP entry prompt;
+
+    repeat
+      :Guest enters OTP;
+      :Verify OTP, expiry, and attempt count;
+      if (OTP valid and unexpired?) then (Yes)
+        :Create user account in users.accounts;
+        :Consume pending registration;
+        :Display registration success;
+        stop
+      else (No)
+        if (OTP expired or 5 failed attempts reached?) then (Yes)
+          :Offer resend OTP or restart registration;
+          if (Resend allowed?) then (Yes)
+            :Check resend cooldown (60 sec)\nand max resends (3 times);
+            if (Resend quota available?) then (Yes)
+              :Generate and save new OTP;
+              :Send new OTP email;
+            else (No)
+              :Require registration restart or wait;
+              stop
+            endif
+          else (No)
+            stop
+          endif
+        else (OTP incorrect)
+          :Increment failed attempt counter;
+          :Display invalid OTP error;
+        endif
+      endif
+    repeat while (Pending registration active?) is (Yes)
+    -> No;
+    stop
+  endif
+else (No)
+  :Display field validation errors (422);
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_02_Login_Session
+title Forum Platform - Activity Diagram 02: Login and Session
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Enter login (username/email) and password;
+:Submit login form;
+:Apply rate limit check;
+if (Request allowed?) then (Yes)
+  :Find account by normalized login and verify password;
+  if (Credentials valid?) then (Yes)
+    :Check account ban status;
+    if (Account active?) then (Yes)
+      :Create opaque session token;
+      :Persist session (idle 4h, absolute 24h);
+      :Set HttpOnly, Secure, SameSite=Lax cookie;
+      :Redirect to forum dashboard;
+      stop
+    else (No, account banned)
+      :Deny login (403 Account Restricted);
+      :Show ban reason and duration;
+      stop
+    endif
+  else (No)
+    :Record failed login attempt;
+    if (Failed attempts >= 5?) then (Yes)
+      :Require CAPTCHA / additional throttling;
+    endif
+    :Show generic credential error (401);
+    stop
+  endif
+else (No)
+  :Return 429 Rate Limited;
+  :Show retry-after guidance;
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_03_Create_Thread
+title Forum Platform - Activity Diagram 03: Create Thread (DEC-003 Reconciled)
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Member drafts title, body, category, tags;
+:Submit create-thread request with session, CSRF, and Idempotency-Key;
+:Validate session and account status;
+if (Authenticated and active?) then (Yes)
+  :Validate title (10-150 chars), body (>=20 chars), max 5 tags;
+  :Check thread cooldown (60 sec);
+  if (Payload valid and cooldown passed?) then (Yes)
+    if (Images attached?) then (Yes)
+      :Verify image_ids exist in content.attachments;
+      :Ensure attachments belong to member and are pending;
+    endif
+    :Insert thread in content.threads\n(status='published', is_locked=false, is_pinned=false);
+    :Mark attachments as linked to thread;
+    :Write ThreadCreated event to transactional outbox;
+    :Commit transaction;
+    :Return 201 Created with thread schema;
+    fork
+      :Search Service consumes event\nand updates search index;
+    fork again
+      :Notification Service consumes event\nand notifies subscribers;
+    end fork
+    :Display created thread to member;
+    stop
+  else (No)
+    :Return validation or cooldown error;
+    stop
+  endif
+else (No)
+  :Return 401 or 403;
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_04_Comment_Reply
+title Forum Platform - Activity Diagram 04: Comment and Reply
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Member enters comment or reply;
+:Submit request with session, CSRF, and Idempotency-Key;
+:Validate session and member permissions;
+if (Authenticated?) then (Yes)
+  :Validate comment length (>=1 char) and cooldown (15 sec);
+  :Check target thread is open (is_locked=false);
+  if (Thread open and cooldown passed?) then (Yes)
+    if (Reply to parent comment?) then (Yes)
+      :Validate parent belongs to same thread;
+      :Verify depth level (max 2 levels allowed);
+      if (Parent valid?) then (Yes)
+        :Insert reply comment;
+      else (No)
+        :Reject reply (400 validation error);
+        stop
+      endif
+    else (Top-level comment)
+      :Insert comment;
+    endif
+    :Write CommentCreated event to transactional outbox;
+    :Commit transaction;
+    :Return 201 Created;
+    :Notification Service notifies thread author / replier;
+    stop
+  else (No)
+    :Return locked thread or cooldown error;
+    stop
+  endif
+else (No)
+  :Return 401 Unauthorized;
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_05_Vote_BestAnswer
+title Forum Platform - Activity Diagram 05: Vote and Best Answer (DEC-002, DEC-003)
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Member clicks upvote or downvote (+1 / -1);
+:Validate session;
+if (Authenticated?) then (Yes)
+  :Fetch target content state and author (via internal REST/cache);
+  if (Target exists and is not member's own content?) then (Yes)
+    :Read existing vote for voter and target;
+    if (Vote already exists?) then (Yes)
+      if (New value equals existing value?) then (Yes)
+        :Delete vote (cancel vote);
+      else (No)
+        :Update vote to new value;
+      endif
+    else (No)
+      :Insert new vote;
+    endif
+    :Record net reputation change in reputation_ledger;
+    :Write outbox event;
+    :Commit transaction;
+    :Return 200 OK with new score and user vote state;
+    stop
+  else (No)
+    :Reject vote (400 SELF_VOTE_NOT_ALLOWED or 404);
+    stop
+  endif
+else (No)
+  :Return 401 Unauthorized;
+  stop
+endif
+
+newpage
+title Forum Platform - Activity Diagram 05B: Mark Best Answer
+start
+:Thread author selects a comment as best answer;
+:Validate session;
+if (Authenticated?) then (Yes)
+  :Verify requester is thread author;
+  :Verify category is Q&A type;
+  :Verify thread is not locked (is_locked=false);
+  :Verify comment belongs to this thread;
+  if (All preconditions pass?) then (Yes)
+    :Set best_answer_comment_id on thread;
+    :Write BestAnswerChanged event to outbox;
+    :Commit transaction;
+    :Return 200 OK;
+    :Interaction Service awards reputation bonus to author;
+    stop
+  else (No)
+    :Return 400 or 403 error;
+    stop
+  endif
+else (No)
+  :Return 401 Unauthorized;
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_06_Report_Moderation
+title Forum Platform - Activity Diagram 06: Abuse Report and Moderation (DEC-004 Reconciled)
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Member selects target (thread, comment, or account) and reason;
+:Submit report with session, CSRF, and Idempotency-Key;
+:Validate session;
+if (Authenticated?) then (Yes)
+  :Check active report duplicate (status IN ('pending', 'reviewing'));
+  if (Active report already exists for reporter & target?) then (Yes)
+    :Return 409 DUPLICATE_REPORT;
+    stop
+  else (No)
+    :Insert report with status='pending';
+    :Return 201 Created with Report schema;
+    stop
+  endif
+else (No)
+  :Return 401 Unauthorized;
+  stop
+endif
+
+newpage
+title Forum Platform - Activity Diagram 06B: Moderator Resolution
+start
+:Moderator reviews pending queue in moderation queue;
+:Select report to investigate;
+:Choose action (lock, delete, ban, dismiss);
+:Submit action with CSRF;
+:Save action to moderation.actions (correlated with report_id);
+:Update report status to 'actioned' or 'dismissed';
+if (Action affects content?) then (Yes)
+  :Call Content Service / emit event to apply status change;
+endif
+if (Action affects account?) then (Yes)
+  :Call User Service / emit event to ban account and revoke sessions;
+endif
+:Emit ModerationActionApplied event to outbox;
+:Commit transaction;
+:Notify affected user if policy requires;
+:Display resolution confirmation;
+stop
+@enduml
+
+@startuml Forum_Activity_07_Search
+title Forum Platform - Activity Diagram 07: Search Visible Threads
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Visitor enters search query and filters;
+:Validate and normalize query;
+if (Query valid?) then (Yes)
+  :Execute full-text search on search.documents;
+  :Filter only visible threads (status='published');
+  :Apply ranking and opaque cursor pagination;
+  :Return 200 OK with SearchPage;
+  stop
+else (No)
+  :Return 422 Validation Error;
+  stop
+endif
+@enduml
+
+@startuml Forum_Activity_08_View_Count_Propagation
+title Forum Platform - Activity Diagram 08: View Count Tracking & Propagation (DEC-005)
+skinparam style strictuml
+skinparam shadowing false
+
+start
+:Visitor opens thread page;
+:Client sends POST /threads/{id}/view with session or IP HMAC;
+:Interaction Service checks thread_views table within 30-minute window;
+if (View already recorded in window?) then (Yes)
+  :Deduplicate (no view count increment);
+  :Return 204 No Content;
+  stop
+else (No, new view)
+  :Record view in interactions.thread_views;
+  :Write ThreadViewCountIncremented event to outbox;
+  :Commit interaction transaction;
+  :Return 204 No Content;
+  :Content Service consumes ThreadViewCountIncremented event;
+  :Increment content.threads.view_count (+1);
+  stop
+endif
+@enduml
