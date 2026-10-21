@@ -44,8 +44,12 @@ Each service implements two distinct health endpoints:
 2. **Readiness Check (`/health/ready`):**
    - Probes downstream dependencies (PostgreSQL database connectivity via `SELECT 1`, Redis ping). Returns `200 OK` when healthy or `503 Service Unavailable` if an essential dependency is disconnected.
 3. **Docker Compose Integration:**
-   - All 10 containers define `healthcheck` sections in `docker-compose.yml` querying `/health/ready` with 10s intervals and 3 retries.
-   - Status: **10/10 containers healthy**.
+   - Container health checks in `docker-compose.yml` are tailored per component:
+     - Application microservices (`gateway`, `user`, `content`, `interaction`, `moderation`, `notification`, `search`): Query `curl -f http://localhost:<port>/health/live`.
+     - PostgreSQL (`forum_postgres`): Queries native `pg_isready -U forum_admin`.
+     - Redis (`forum_redis`): Queries native `redis-cli ping`.
+     - Mailpit (`forum_mailpit`): Queries `/mailpit readyz`.
+   - Status: **10/10 containers running healthy**.
 
 ---
 

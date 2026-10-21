@@ -15,8 +15,8 @@ In accordance with Task 022, an exhaustive release audit of the Forum Platform w
 | Environment / Acceptance Dimension | Status | Summary of Empirical Findings |
 | :--- | :--- | :--- |
 | **A. Local Development / Demo / Test** | **`PASS`** | 10/10 Docker Compose containers healthy. All 116 tests pass (108 backend + 8 Playwright headless Firefox E2E). Zero avoidable warnings. All six microservices communicate cleanly via API Gateway. Interactive user journey validated. |
-| **B. Public Staging Ingress & External SMTP** | **`NOT TESTED` / `CONDITIONAL`** | Plain HTTP Gateway on port 8000 and Mailpit SMTP sink pass locally. Public TLS ingress proxy (HTTPS, Let's Encrypt / external certs, DNS) and external production SMTP credentials (e.g., SendGrid/AWS SES) are architecturally supported but require infrastructure provisioning. |
-| **C. Production Deployment** | **`PASS WITH CONDITIONS`** | Core business logic, RBAC, schema isolation, and backup drills verified. Requires production-grade external secrets management, WAL-based PITR archiving (beyond logical dumps), and extended multi-hour capacity stress testing. |
+| **B. Public Staging Ingress & External SMTP** | **`NOT TESTED`** | Plain HTTP Gateway on port 8000 and Mailpit SMTP sink pass locally. Public TLS ingress proxy (HTTPS, Let's Encrypt / external certs, DNS) and external production SMTP credentials (e.g., SendGrid/AWS SES) are architecturally supported but require infrastructure provisioning. |
+| **C. Production Deployment** | **`NOT TESTED` / `NOT APPROVED FOR PRODUCTION`** | Core business logic, RBAC, schema isolation, and backup drills verified locally. Production deployment cannot be approved until cloud infrastructure, centralized KMS secrets management, continuous WAL-based PITR archiving, and multi-hour high-volume capacity stress testing are provisioned and tested. |
 | **D. Frontend Visual / UI Acceptance** | **`DEFERRED`** | Technical SPA integration (auth, sessions, CSRF, error handling, XSS protection, RBAC views) is verified. Visual layout, typography, CSS polish, and styling acceptance are explicitly deferred pending formal UI specifications. |
 
 ---
