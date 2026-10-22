@@ -410,3 +410,25 @@ async def test_tampered_csrf_token_rejected_on_logout():
         # Verify Set-Cookie header expires the cookie
         set_cookie = res_success.headers.get("set-cookie", "")
         assert 'forum_session=""' in set_cookie or "Max-Age=0" in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_test_endpoint_safety_in_production():
+    """Verify test-only endpoints (/test/otp, /test/reset-rate-limiters) return 404 in production."""
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # In non-production, reset-rate-limiters works
+        res_dev = await client.post("/test/reset-rate-limiters")
+        assert res_dev.status_code == 200
+
+        # Simulate production environment
+        orig_env = user_settings.environment
+        try:
+            user_settings.environment = "production"
+            res_prod_reset = await client.post("/test/reset-rate-limiters")
+            assert res_prod_reset.status_code == 404
+
+            res_prod_otp = await client.get("/test/otp?recipient=test@example.com")
+            assert res_prod_otp.status_code == 404
+        finally:
+            user_settings.environment = orig_env

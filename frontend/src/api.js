@@ -162,6 +162,16 @@ export class ApiClient {
     });
   }
 
+  async changePassword(currentPassword, newPassword) {
+    return this.request("/profile/change-password", {
+      method: "POST",
+      body: {
+        current_password: currentPassword,
+        new_password: newPassword,
+      },
+    });
+  }
+
   // --- Content & Forum Endpoints ---
 
   async getCategories() {

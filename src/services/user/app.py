@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from src.common.errors import (
@@ -29,7 +29,13 @@ from src.services.user.auth import (
 )
 from src.services.user.config import user_settings
 from src.services.user.database import user_db
-from src.services.user.models import Account, PendingRegistration, Session, UserOutboxEvent
+from src.services.user.models import (
+    Account,
+    PasswordHistory,
+    PendingRegistration,
+    Session,
+    UserOutboxEvent,
+)
 from src.services.user.otp_delivery import (
     EmailDeliveryError,
     deliver_otp,
@@ -139,7 +145,7 @@ async def get_csrf_token() -> dict[str, str]:
     return {"csrf_token": token}
 
 
-# --- Development/Testing OTP Inspection Hook (FR-2) ---
+# --- Development/Testing OTP & Rate Limiter Inspection Hook (FR-2) ---
 @app.get("/test/otp", include_in_schema=False)
 async def get_test_otp(recipient: str) -> JSONResponse:
     """Development/testing-only endpoint to inspect latest OTP code without leaking via public APIs."""
@@ -151,6 +157,18 @@ async def get_test_otp(recipient: str) -> JSONResponse:
             status_code=status.HTTP_404_NOT_FOUND, detail="No OTP found for recipient"
         )
     return JSONResponse(status_code=status.HTTP_200_OK, content={"code": code})
+
+
+@app.post("/test/reset-rate-limiters", include_in_schema=False)
+async def reset_rate_limiters_hook() -> JSONResponse:
+    """Development/testing-only endpoint to reset sliding window limiters."""
+    if user_settings.environment == "production":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not available")
+    rate_limiter_register.reset()
+    rate_limiter_login.reset()
+    rate_limiter_verify_otp.reset()
+    rate_limiter_resend_otp.reset()
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "reset"})
 
 
 # --- FR-1: Account Registration (DEC-001) ---
@@ -658,7 +676,7 @@ async def update_own_profile(
 ) -> JSONResponse:
     """Update editable profile fields (display_name, bio)."""
     async with user_db.transaction() as db_session:
-        acc_query = select(Account).where(Account.id == ctx.user.id)
+        acc_query = select(Account).where(Account.id == ctx.user.id).with_for_update()
         account = (await db_session.execute(acc_query)).scalar_one()
 
         if req.display_name is not None:
@@ -711,8 +729,68 @@ async def change_email_verify(req: ChangeEmailVerifyRequest, request: Request) -
 
 
 @app.post("/profile/change-password", tags=["Profile"], dependencies=[Depends(verify_csrf_header)])
-async def change_password(req: ChangePasswordRequest, request: Request) -> JSONResponse:
-    return not_implemented_response(request, "POST /profile/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    request: Request,
+    ctx: AuthenticatedContext = Depends(get_current_session),
+) -> Response:
+    """Change account password, record history, and revoke other active sessions (ADR-003)."""
+    now = datetime.now(UTC)
+
+    # 1. Verify current password
+    if not verify_password(ctx.user.password_hash, req.current_password):
+        return error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="INVALID_PASSWORD",
+            message="Current password is incorrect.",
+            request=request,
+        )
+
+    # 2. Prevent password reuse (identical to current password)
+    if verify_password(ctx.user.password_hash, req.new_password):
+        return error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="PASSWORD_REUSE_FORBIDDEN",
+            message="New password cannot be the same as the current password.",
+            request=request,
+        )
+
+    # 3. Hash new password and update account in atomic transaction
+    new_hash = hash_password(req.new_password)
+
+    async with user_db.transaction() as db_session:
+        acc_query = select(Account).where(Account.id == ctx.user.id).with_for_update()
+        account = (await db_session.execute(acc_query)).scalar_one()
+
+        # Record old password in history before updating
+        db_session.add(
+            PasswordHistory(
+                account_id=account.id,
+                password_hash=account.password_hash,
+                created_at=now,
+            )
+        )
+
+        account.password_hash = new_hash
+        account.password_changed_at = now
+
+        # Revoke all OTHER active sessions for this account
+        await db_session.execute(
+            update(Session)
+            .where(
+                Session.account_id == account.id,
+                Session.id != ctx.session.id,
+                Session.revoked_at.is_(None),
+            )
+            .values(revoked_at=now, revocation_reason="password_changed")
+        )
+
+    logger.info(
+        "Password successfully updated for user %s; other sessions revoked.",
+        ctx.user.id,
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- Public User Profile ---

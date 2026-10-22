@@ -1091,11 +1091,98 @@ async function loadAdminUsers() {
 }
 
 // -----------------------------------------------------------------------------
-// SCREEN 07: User Profile, Reputation & Bookmarks
+// SCREEN 07: User Profile, Reputation, Password Mutation & Bookmarks
 // -----------------------------------------------------------------------------
 const profileDetails = document.getElementById("profile-details");
 const userBookmarksList = document.getElementById("user-bookmarks-list");
 const btnProfileLogout = document.getElementById("btn-profile-logout");
+const formChangePassword = document.getElementById("form-change-password");
+const inputCurrentPassword = document.getElementById("input-current-password");
+const inputNewPassword = document.getElementById("input-new-password");
+const inputConfirmPassword = document.getElementById("input-confirm-password");
+const changePasswordError = document.getElementById("change-password-error");
+const btnSubmitChangePassword = document.getElementById("btn-submit-change-password");
+
+if (formChangePassword) {
+  formChangePassword.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (changePasswordError) {
+      changePasswordError.style.display = "none";
+      changePasswordError.textContent = "";
+    }
+
+    const currentPassword = inputCurrentPassword ? inputCurrentPassword.value : "";
+    const newPassword = inputNewPassword ? inputNewPassword.value : "";
+    const confirmPassword = inputConfirmPassword ? inputConfirmPassword.value : "";
+
+    if (!currentPassword) {
+      if (changePasswordError) {
+        changePasswordError.textContent = "Current password is required.";
+        changePasswordError.style.display = "block";
+      }
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      if (changePasswordError) {
+        changePasswordError.textContent = "New password must be at least 8 characters.";
+        changePasswordError.style.display = "block";
+      }
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      if (changePasswordError) {
+        changePasswordError.textContent = "New password and confirmation do not match.";
+        changePasswordError.style.display = "block";
+      }
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      if (changePasswordError) {
+        changePasswordError.textContent = "New password cannot be identical to current password.";
+        changePasswordError.style.display = "block";
+      }
+      return;
+    }
+
+    if (btnSubmitChangePassword) {
+      btnSubmitChangePassword.disabled = true;
+      btnSubmitChangePassword.textContent = "UPDATING...";
+    }
+
+    try {
+      const res = await api.changePassword(currentPassword, newPassword);
+      if (res.ok) {
+        showAlert("success", "Password updated successfully. Other active sessions revoked.");
+        formChangePassword.reset();
+        if (changePasswordError) {
+          changePasswordError.style.display = "none";
+        }
+      } else {
+        const errorMsg = res.error?.message || "Failed to update password.";
+        if (changePasswordError) {
+          changePasswordError.textContent = errorMsg;
+          changePasswordError.style.display = "block";
+        }
+        showAlert("error", errorMsg);
+      }
+    } catch (err) {
+      const errorMsg = err.message || "An unexpected error occurred.";
+      if (changePasswordError) {
+        changePasswordError.textContent = errorMsg;
+        changePasswordError.style.display = "block";
+      }
+      showAlert("error", errorMsg);
+    } finally {
+      if (btnSubmitChangePassword) {
+        btnSubmitChangePassword.disabled = false;
+        btnSubmitChangePassword.textContent = "UPDATE PASSWORD";
+      }
+    }
+  });
+}
 
 if (btnProfileLogout) {
   btnProfileLogout.onclick = async () => {

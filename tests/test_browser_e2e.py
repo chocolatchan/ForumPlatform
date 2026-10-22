@@ -63,21 +63,7 @@ def purge_mailpit() -> None:
 def reset_user_service_rate_limiters() -> None:
     """Reset in-memory rate limiters in the live user service container between tests."""
     with contextlib.suppress(Exception):
-        import subprocess
-
-        subprocess.run(
-            [
-                "docker",
-                "exec",
-                "forum_user_service",
-                "python3",
-                "-c",
-                "from src.services.user.app import rate_limiter_login, rate_limiter_register, rate_limiter_verify_otp; "
-                "rate_limiter_login.reset(); rate_limiter_register.reset(); rate_limiter_verify_otp.reset();",
-            ],
-            capture_output=True,
-            timeout=5.0,
-        )
+        httpx.post("http://localhost:8001/test/reset-rate-limiters", timeout=3.0)
 
 
 @pytest.fixture(autouse=True)
@@ -274,11 +260,7 @@ def test_browser_incorrect_otp_failure_state(browser_context):
     page.click("#btn-verify-submit")
 
     alert = page.locator("#global-alert")
-    expect(alert).to_be_visible()
-    assert (
-        "verification failed" in alert.inner_text().lower()
-        or "invalid" in alert.inner_text().lower()
-    )
+    expect(alert).to_contain_text("verification rejected", ignore_case=True)
 
     page.close()
 
@@ -819,5 +801,121 @@ def test_browser_advanced_xss_sanitization_matrix(browser_context):
         assert 'href="javascript:' not in html
         assert 'href="data:' not in html
         assert 'href="vbscript:' not in html
+
+    page.close()
+
+
+def test_browser_profile_password_change_journey(browser_context):
+    """Scenario 13: Profile Password Change Workflow in Live Browser (Task 026).
+    1. Register and activate new test user via Mailpit OTP.
+    2. Authenticate and navigate to Profile Dossier view (#view-profile).
+    3. Verify client-side validation:
+       - Mismatched confirmation displays error banner.
+       - Password identical to current password displays error banner.
+    4. Fill valid current password and new password.
+    5. Submit and verify success alert.
+    6. Verify input fields are cleared.
+    7. Terminate session (logout).
+    8. Verify old password fails login.
+    9. Verify new password successfully authenticates.
+    """
+    page = browser_context.new_page()
+    purge_mailpit()
+
+    unique_id = uuid.uuid4().hex[:6]
+    username = f"pwdusr_{unique_id}"
+    email = "tester@example.test"
+    old_pwd = "InitialPassword123!"
+    new_pwd = "ChangedPassword456!"
+
+    import subprocess
+
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "forum_postgres",
+            "psql",
+            "-U",
+            "forum_admin",
+            "-d",
+            "forum_users",
+            "-c",
+            f"DELETE FROM users.accounts WHERE email='{email}'; DELETE FROM users.pending_registrations WHERE email_normalized='{email}';",
+        ],
+        capture_output=True,
+    )
+
+    # 1. Register & Verify
+    page.goto(GATEWAY_BASE_URL)
+    page.wait_for_selector("#navbar button:has-text('Sign Up')", timeout=10000)
+    page.locator("#navbar button:has-text('Sign Up')").click()
+    expect(page.locator("#view-register")).to_be_visible()
+
+    page.fill("#reg-username", username)
+    page.fill("#reg-email", email)
+    page.fill("#reg-password", old_pwd)
+    page.click("#btn-reg-submit")
+
+    otp = get_latest_otp_from_mailpit(email)
+    page.fill("#verify-otp-code", otp)
+    page.click("#btn-verify-submit")
+    expect(page.locator("#global-alert")).to_contain_text("activated", ignore_case=True)
+
+    # 2. Login
+    expect(page.locator("#view-login")).to_be_visible()
+    page.fill("#login-identifier", username)
+    page.fill("#login-password", old_pwd)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text(username)
+
+    # 3. Navigate to Profile
+    page.locator(f"#navbar button:has-text('Profile ({username})')").click()
+    expect(page.locator("#view-profile")).to_be_visible()
+    expect(page.locator("#profile-details")).to_contain_text(username)
+
+    # 4. Client validation: Mismatch
+    page.fill("#input-current-password", old_pwd)
+    page.fill("#input-new-password", new_pwd)
+    page.fill("#input-confirm-password", "DifferentPassword999!")
+    page.click("#btn-submit-change-password")
+
+    expect(page.locator("#change-password-error")).to_be_visible()
+    expect(page.locator("#change-password-error")).to_contain_text("do not match")
+
+    # 5. Client validation: Identical to current password
+    page.fill("#input-new-password", old_pwd)
+    page.fill("#input-confirm-password", old_pwd)
+    page.click("#btn-submit-change-password")
+    expect(page.locator("#change-password-error")).to_be_visible()
+    expect(page.locator("#change-password-error")).to_contain_text("identical to current password")
+
+    # 6. Valid password change submission
+    page.fill("#input-current-password", old_pwd)
+    page.fill("#input-new-password", new_pwd)
+    page.fill("#input-confirm-password", new_pwd)
+    page.click("#btn-submit-change-password")
+
+    expect(page.locator("#global-alert")).to_contain_text("Password updated successfully")
+    expect(page.locator("#input-current-password")).to_have_value("")
+    expect(page.locator("#input-new-password")).to_have_value("")
+    expect(page.locator("#input-confirm-password")).to_have_value("")
+
+    # 7. Logout
+    page.click("#btn-profile-logout")
+    expect(page.locator("#global-alert")).to_contain_text("logged out")
+
+    # 8. Attempt login with old password -> should fail
+    page.locator("#navbar button:has-text('Log In')").click()
+    page.fill("#login-identifier", username)
+    page.fill("#login-password", old_pwd)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text("Authentication failed")
+
+    # 9. Login with new password -> should succeed
+    page.fill("#login-identifier", username)
+    page.fill("#login-password", new_pwd)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text(username)
 
     page.close()

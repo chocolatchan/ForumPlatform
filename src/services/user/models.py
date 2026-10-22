@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     SmallInteger,
     String,
     Text,
@@ -157,7 +158,9 @@ class PasswordHistory(Base):
     __tablename__ = "password_history"
     __table_args__ = {"schema": "users"}
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.accounts.id", ondelete="CASCADE"), nullable=False
     )

@@ -88,6 +88,10 @@ async def setup_auth_test_database() -> AsyncGenerator[None, None]:
 
 @pytest.fixture(autouse=True)
 def configure_test_email_environment():
+    user_app_mod.rate_limiter_register.reset()
+    user_app_mod.rate_limiter_login.reset()
+    user_app_mod.rate_limiter_verify_otp.reset()
+    user_app_mod.rate_limiter_resend_otp.reset()
     otp_delivery_sink.clear()
     orig_backend = user_settings.email_delivery_backend
     orig_allowlist = user_settings.dev_email_allowlist
@@ -97,6 +101,10 @@ def configure_test_email_environment():
     user_settings.email_delivery_backend = orig_backend
     user_settings.dev_email_allowlist = orig_allowlist
     otp_delivery_sink.clear()
+    user_app_mod.rate_limiter_register.reset()
+    user_app_mod.rate_limiter_login.reset()
+    user_app_mod.rate_limiter_verify_otp.reset()
+    user_app_mod.rate_limiter_resend_otp.reset()
 
 
 # ==============================================================================
@@ -648,3 +656,177 @@ async def test_full_auth_flow_through_gateway():
                 headers={"X-CSRF-Token": csrf_token},
             )
             assert logout_res.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_password_change_lifecycle():
+    """Verify complete password change workflow:
+    - 401 when unauthenticated
+    - 403 when CSRF missing with active session
+    - 400 when current password incorrect (INVALID_PASSWORD)
+    - 422 when new password too short (< 8 chars)
+    - 400 when new password identical to current password (PASSWORD_REUSE_FORBIDDEN)
+    - 204 on successful password change
+    - Other active sessions revoked, current session remains active
+    - Old password fails login, new password succeeds login
+    """
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Unauthenticated change password -> 401
+        res = await client.post(
+            "/profile/change-password",
+            json={"current_password": "OldPassword123!", "new_password": "NewPassword123!"},
+        )
+        assert res.status_code == 401
+
+        # Register & verify a test user: "emma"
+        reg_res = await client.post(
+            "/auth/register",
+            json={
+                "username": "emma_pwd",
+                "email": "emma@example.com",
+                "password": "InitialPassword123!",
+            },
+        )
+        assert reg_res.status_code == 202
+        otp = otp_delivery_sink.get_latest_otp("emma@example.com")
+        assert otp is not None
+        v_res = await client.post(
+            "/auth/register/verify",
+            json={"email": "emma@example.com", "otp": otp},
+        )
+        assert v_res.status_code == 201
+
+        # Session 1 (Client 1)
+        login1_res = await client.post(
+            "/auth/login",
+            json={"login": "emma_pwd", "password": "InitialPassword123!"},
+        )
+        assert login1_res.status_code == 200
+        client1_cookie = client.cookies.get("forum_session")
+        assert client1_cookie is not None
+
+    # Session 2 (Client 2 - e.g. mobile or other device)
+    async with AsyncClient(transport=transport, base_url="http://test") as client2:
+        login2_res = await client2.post(
+            "/auth/login",
+            json={"login": "emma_pwd", "password": "InitialPassword123!"},
+        )
+        assert login2_res.status_code == 200
+        client2_cookie = client2.cookies.get("forum_session")
+        assert client2_cookie is not None
+
+        # Verify Client 2 session is currently active
+        s2_check = await client2.get("/auth/session")
+        assert s2_check.status_code == 200
+
+    # Back to Client 1 to test change-password validations
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        cookies={"forum_session": client1_cookie},
+    ) as client1:
+        # 2. CSRF missing -> 403
+        csrf_missing_res = await client1.post(
+            "/profile/change-password",
+            json={
+                "current_password": "InitialPassword123!",
+                "new_password": "NewSecretPassword123!",
+            },
+        )
+        assert csrf_missing_res.status_code == 403
+
+        # Fetch CSRF
+        csrf_res = await client1.get("/auth/csrf")
+        csrf_token = csrf_res.json()["csrf_token"]
+        csrf_headers = {"X-CSRF-Token": csrf_token}
+
+        # 3. Incorrect current password -> 400 INVALID_PASSWORD
+        wrong_pwd_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={"current_password": "WrongPassword999!", "new_password": "NewSecretPassword123!"},
+        )
+        assert wrong_pwd_res.status_code == 400
+        assert wrong_pwd_res.json()["error"]["code"] == "INVALID_PASSWORD"
+
+        # 4. New password too short (< 8 chars) -> 422 VALIDATION_ERROR
+        short_pwd_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={"current_password": "InitialPassword123!", "new_password": "short"},
+        )
+        assert short_pwd_res.status_code == 422
+        assert short_pwd_res.json()["error"]["code"] == "VALIDATION_ERROR"
+
+        # 5. New password identical to current password -> 400 PASSWORD_REUSE_FORBIDDEN
+        reuse_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={"current_password": "InitialPassword123!", "new_password": "InitialPassword123!"},
+        )
+        assert reuse_res.status_code == 400
+        assert reuse_res.json()["error"]["code"] == "PASSWORD_REUSE_FORBIDDEN"
+
+        # 6. Success -> 204 No Content
+        success_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={
+                "current_password": "InitialPassword123!",
+                "new_password": "NewSecretPassword123!",
+            },
+        )
+        assert success_res.status_code == 204
+
+        # 6b. Verify backward compatibility: old_password alias accepted
+        alias_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={
+                "old_password": "NewSecretPassword123!",
+                "new_password": "AliasTestedPassword123!",
+            },
+        )
+        assert alias_res.status_code == 204
+
+        # 6c. Change back to NewSecretPassword123! using canonical current_password
+        revert_res = await client1.post(
+            "/profile/change-password",
+            headers=csrf_headers,
+            json={
+                "current_password": "AliasTestedPassword123!",
+                "new_password": "NewSecretPassword123!",
+            },
+        )
+        assert revert_res.status_code == 204
+
+        # 7. Current session remains authenticated
+        s1_check = await client1.get("/auth/session")
+        assert s1_check.status_code == 200
+        assert s1_check.json()["user"]["username"] == "emma_pwd"
+
+    # 8. Check that other session (Client 2) has been revoked
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        cookies={"forum_session": client2_cookie},
+    ) as client2:
+        s2_after = await client2.get("/auth/session")
+        assert s2_after.status_code == 401
+        assert "revoked" in s2_after.json()["error"]["message"].lower()
+
+    # 9. Verify login with old password fails, new password succeeds
+    async with AsyncClient(transport=transport, base_url="http://test") as login_client:
+        old_login = await login_client.post(
+            "/auth/login",
+            json={"login": "emma_pwd", "password": "InitialPassword123!"},
+        )
+        assert old_login.status_code == 401
+
+        new_login = await login_client.post(
+            "/auth/login",
+            json={"login": "emma_pwd", "password": "NewSecretPassword123!"},
+        )
+        assert new_login.status_code == 200
+        assert new_login.json()["user"]["username"] == "emma_pwd"

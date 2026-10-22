@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 # --- Public/Shared Schemas ---
@@ -109,7 +109,11 @@ class ChangeEmailVerifyRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str
+    current_password: str = Field(
+        ...,
+        validation_alias=AliasChoices("current_password", "old_password"),
+        serialization_alias="current_password",
+    )
     new_password: str = Field(..., min_length=8)
 
 
