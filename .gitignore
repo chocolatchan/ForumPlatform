@@ -3,6 +3,12 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
 # Benchmark raw traces
 docs/audit/performance/**/*.jsonl
 *.jsonl
+

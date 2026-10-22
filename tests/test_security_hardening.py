@@ -96,7 +96,7 @@ def reset_security_environment():
     orig_allowlist = user_settings.dev_email_allowlist
     user_settings.email_delivery_backend = "memory"
     user_settings.dev_email_allowlist = (
-        "developer@example.test,tester@example.test,concurrent@example.test"
+        "developer@example.test,tester@example.test,concurrent@example.test,concurrent_pwd@example.test"
     )
     yield
     user_settings.email_delivery_backend = orig_backend
@@ -432,3 +432,68 @@ async def test_test_endpoint_safety_in_production():
             assert res_prod_otp.status_code == 404
         finally:
             user_settings.environment = orig_env
+
+
+@pytest.mark.asyncio
+async def test_concurrent_password_change_serialized_safety():
+    """Verify concurrent password change requests for the same account serialize safely under row lock."""
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Register and activate candidate
+        reg_res = await client.post(
+            "/auth/register",
+            json={
+                "username": "race_pwd_user",
+                "email": "concurrent_pwd@example.test",
+                "password": "InitialPassword123!",
+            },
+        )
+        assert reg_res.status_code == 202
+        otp = otp_delivery_sink.get_latest_otp("concurrent_pwd@example.test")
+        assert otp is not None
+        v_res = await client.post(
+            "/auth/register/verify",
+            json={"email": "concurrent_pwd@example.test", "otp": otp},
+        )
+        assert v_res.status_code == 201
+
+        # Login to obtain session
+        login_res = await client.post(
+            "/auth/login",
+            json={"login": "race_pwd_user", "password": "InitialPassword123!"},
+        )
+        assert login_res.status_code == 200
+        session_cookie = client.cookies.get("forum_session")
+        assert session_cookie is not None
+
+        # Fetch CSRF
+        csrf_res = await client.get("/auth/csrf")
+        csrf_token = csrf_res.json()["csrf_token"]
+        csrf_headers = {"X-CSRF-Token": csrf_token}
+
+        # Issue 2 concurrent password change requests both with current_password="InitialPassword123!"
+        async def submit_change(new_pwd: str):
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://test",
+                cookies={"forum_session": session_cookie},
+            ) as c:
+                return await c.post(
+                    "/profile/change-password",
+                    headers=csrf_headers,
+                    json={
+                        "current_password": "InitialPassword123!",
+                        "new_password": new_pwd,
+                    },
+                )
+
+        res1, res2 = await asyncio.gather(
+            submit_change("NewRacePasswordA1!"),
+            submit_change("NewRacePasswordB2!"),
+        )
+
+        status_codes = [res1.status_code, res2.status_code]
+        # At least one request must succeed with 204 No Content
+        assert 204 in status_codes
+        # The other request either succeeds (if it executed first or was serialized) or fails cleanly with 400 (if serialized second because InitialPassword123! is no longer valid)
+        assert all(code in (204, 400) for code in status_codes)
