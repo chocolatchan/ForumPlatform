@@ -23,6 +23,7 @@ class UserProfileOwn(BaseModel):
     email: str
     role: str
     created_at: datetime
+    avatar_url: str | None = None
 
 
 class UserAdminView(BaseModel):
@@ -102,6 +103,24 @@ class UpdateProfileRequest(BaseModel):
 
 class ChangeEmailRequest(BaseModel):
     new_email: str
+    password: str | None = None
+
+
+class ChangeEmailResendRequest(BaseModel):
+    pass
+
+
+class SetAvatarRequest(BaseModel):
+    image_id: uuid.UUID
+
+
+class UserProfilePublic(BaseModel):
+    id: uuid.UUID
+    username: str
+    display_name: str | None = None
+    bio: str | None = None
+    role: str
+    avatar_url: str | None = None
 
 
 class ChangeEmailVerifyRequest(BaseModel):

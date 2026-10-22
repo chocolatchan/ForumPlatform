@@ -178,26 +178,24 @@ async def test_unimplemented_endpoints_return_501_not_implemented():
     """Verify unimplemented business endpoints return controlled 501 with canonical Error schema."""
     transport_user = ASGITransport(app=user_app)
     async with AsyncClient(transport=transport_user, base_url="http://test") as client:
-        # POST /auth/recovery/request with valid schema -> 501 (recovery not yet implemented)
+        # POST /profile/change-email/request without session -> 401 Unauthorized (now implemented in Task 030)
         res = await client.post(
-            "/auth/recovery/request",
+            "/profile/change-email/request",
             json={
-                "email": "valid_user@example.com",
+                "new_email": "valid_user@example.com",
             },
         )
-        assert res.status_code == 501
+        assert res.status_code == 401
         data = res.json()
-        assert data["error"]["code"] == "NOT_IMPLEMENTED"
-        assert "POST /auth/recovery/request" in data["error"]["message"]
+        assert data["error"]["code"] == "UNAUTHORIZED"
 
     transport_content = ASGITransport(app=content_app)
     async with AsyncClient(transport=transport_content, base_url="http://test") as client:
-        # POST /uploads/images -> 501 (images upload not implemented)
+        # Unauthenticated POST /uploads/images -> 401 Unauthorized (implemented in Task 027)
         res = await client.post("/uploads/images")
-        assert res.status_code == 501
+        assert res.status_code == 401
         data = res.json()
-        assert data["error"]["code"] == "NOT_IMPLEMENTED"
-        assert "POST /uploads/images" in data["error"]["message"]
+        assert data["error"]["code"] == "UNAUTHORIZED"
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,15 @@ class UserSettings(BaseServiceSettings):
     rate_limit_resend_otp_max: int = Field(
         default=5, description="Max resend attempts per minute per IP"
     )
+    rate_limit_recovery_request_max: int = Field(
+        default=5, description="Max recovery requests per minute per IP"
+    )
+    rate_limit_recovery_verify_max: int = Field(
+        default=10, description="Max recovery verify attempts per minute per IP"
+    )
+    rate_limit_recovery_reset_max: int = Field(
+        default=5, description="Max recovery reset attempts per minute per IP"
+    )
     rate_limit_window_seconds: int = Field(
         default=60, description="Sliding window duration in seconds"
     )

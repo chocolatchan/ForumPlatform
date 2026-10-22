@@ -133,3 +133,26 @@ async def verify_csrf_header(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF token validation failed or missing X-CSRF-Token header.",
         )
+
+
+async def verify_internal_service_key(request: Request) -> None:
+    """Verify internal service-to-service key for internal endpoints."""
+    key = request.headers.get("X-Internal-Service-Key")
+    expected = user_settings.internal_service_secret
+    if key:
+        if key != expected:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Internal service key invalid.",
+            )
+        return
+
+    # In local testing or direct execution without Gateway, allow if environment is development/test
+    if user_settings.environment in ("development", "test"):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Internal service key missing.",
+    )
+

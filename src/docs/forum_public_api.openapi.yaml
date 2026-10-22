@@ -353,6 +353,56 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /profile/avatar:
+    put:
+      tags: [Profile]
+      summary: Set or update profile avatar
+      operationId: setAvatar
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [image_id]
+              properties:
+                image_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Avatar set successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileOwn'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Profile]
+      summary: Remove profile avatar
+      operationId: deleteAvatar
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Avatar removed successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /profile/change-email/request:
     post:
       tags: [Profile]
@@ -386,6 +436,34 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '422':
           $ref: '#/components/responses/ValidationError'
+
+  /profile/change-email/resend-otp:
+    post:
+      tags: [Profile]
+      summary: Resend email change verification OTP
+      operationId: resendEmailChangeOtp
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200':
+          description: Verification code resent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   /profile/change-email/verify:
     post:
@@ -1806,6 +1884,9 @@ components:
         role:
           type: string
           enum: [member, moderator, admin]
+        avatar_url:
+          type: string
+          nullable: true
 
     UserProfileOwn:
       type: object
@@ -1831,6 +1912,9 @@ components:
         created_at:
           type: string
           format: date-time
+        avatar_url:
+          type: string
+          nullable: true
 
     UpdateProfileRequest:
       type: object

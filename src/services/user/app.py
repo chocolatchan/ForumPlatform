@@ -26,6 +26,7 @@ from src.services.user.auth import (
     get_current_session,
     require_role,
     verify_csrf_header,
+    verify_internal_service_key,
 )
 from src.services.user.config import user_settings
 from src.services.user.database import user_db
@@ -947,3 +948,38 @@ async def admin_ban_user(
             "created_at": account.created_at.isoformat() if account.created_at else None,
         },
     )
+
+
+@app.get(
+    "/internal/users/{user_id}",
+    tags=["Internal"],
+    dependencies=[Depends(verify_internal_service_key)],
+)
+async def get_internal_user_contact(
+    user_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Internal service-to-service endpoint to retrieve user contact details (DEC-002)."""
+    async with user_db.session() as db_session:
+        query = select(Account).where(Account.id == user_id)
+        account = (await db_session.execute(query)).scalar_one_or_none()
+        if not account:
+            return error_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="USER_NOT_FOUND",
+                message=f"User with ID '{user_id}' was not found.",
+                request=request,
+            )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "id": str(account.id),
+                "username": account.username,
+                "display_name": account.display_name,
+                "email": account.email,
+                "role": account.role,
+                "is_banned": account.is_banned,
+            },
+        )
+

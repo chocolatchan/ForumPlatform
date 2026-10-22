@@ -357,6 +357,14 @@ const loginIdentifier = document.getElementById("login-identifier");
 const loginPassword = document.getElementById("login-password");
 const btnToggleLoginPw = document.getElementById("btn-toggle-login-pw");
 const btnGotoRegister = document.getElementById("btn-goto-register");
+const btnGotoRecovery = document.getElementById("btn-goto-recovery");
+
+if (btnGotoRecovery) {
+  btnGotoRecovery.onclick = () => {
+    formLogin.reset();
+    navigateTo("view-recovery-request");
+  };
+}
 
 if (btnToggleLoginPw) {
   btnToggleLoginPw.onclick = () => {
@@ -384,6 +392,154 @@ if (formLogin) {
       navigateTo("view-home", true);
     } else {
       showAlert("error", `Authentication failed: ${res.error?.message || "Invalid credentials."}`);
+    }
+  });
+}
+
+// -----------------------------------------------------------------------------
+// SCREEN 02B: Password Recovery Lifecycle (Task 029)
+// -----------------------------------------------------------------------------
+let recoveryState = {
+  email: "",
+  resetToken: null,
+};
+
+function clearRecoveryState() {
+  recoveryState.email = "";
+  recoveryState.resetToken = null;
+  const reqForm = document.getElementById("form-recovery-request");
+  if (reqForm) reqForm.reset();
+  const vForm = document.getElementById("form-recovery-verify");
+  if (vForm) vForm.reset();
+  const rForm = document.getElementById("form-recovery-reset");
+  if (rForm) rForm.reset();
+  const errDiv = document.getElementById("recovery-reset-error");
+  if (errDiv) {
+    errDiv.style.display = "none";
+    errDiv.textContent = "";
+  }
+}
+
+// 1. Request form
+const formRecoveryRequest = document.getElementById("form-recovery-request");
+const recoveryEmail = document.getElementById("recovery-email");
+const btnRecoveryBackToLogin = document.getElementById("btn-recovery-back-to-login");
+
+if (btnRecoveryBackToLogin) {
+  btnRecoveryBackToLogin.onclick = () => {
+    clearRecoveryState();
+    navigateTo("view-login");
+  };
+}
+
+if (formRecoveryRequest) {
+  formRecoveryRequest.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = recoveryEmail.value.trim();
+    if (!email) return;
+
+    recoveryState.email = email;
+    const res = await api.requestRecovery(email);
+    // Neutral 202 is always returned per DEC-001 anti-enumeration contract
+    showAlert("success", res.data?.message || "Recovery code sent if account exists.");
+    const targetEmailDiv = document.getElementById("recovery-verify-target-email");
+    if (targetEmailDiv) targetEmailDiv.textContent = email;
+    navigateTo("view-recovery-verify");
+  });
+}
+
+// 2. Verify form
+const formRecoveryVerify = document.getElementById("form-recovery-verify");
+const recoveryOtp = document.getElementById("recovery-otp");
+const btnRecoveryVerifyCancel = document.getElementById("btn-recovery-verify-cancel");
+
+if (btnRecoveryVerifyCancel) {
+  btnRecoveryVerifyCancel.onclick = () => {
+    clearRecoveryState();
+    navigateTo("view-login");
+  };
+}
+
+if (formRecoveryVerify) {
+  formRecoveryVerify.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const otp = recoveryOtp.value.trim();
+    if (!otp) return;
+
+    const res = await api.verifyRecovery(recoveryState.email, otp);
+    if (res.ok && res.data?.reset_token) {
+      recoveryState.resetToken = res.data.reset_token;
+      showAlert("success", "Recovery code verified. Please set your new password.");
+      formRecoveryVerify.reset();
+      navigateTo("view-recovery-reset");
+    } else {
+      showAlert("error", res.error?.message || "Invalid or expired recovery code.");
+    }
+  });
+}
+
+// 3. Reset form
+const formRecoveryReset = document.getElementById("form-recovery-reset");
+const recoveryNewPassword = document.getElementById("recovery-new-password");
+const recoveryConfirmPassword = document.getElementById("recovery-confirm-password");
+const btnToggleRecoveryPw = document.getElementById("btn-toggle-recovery-pw");
+const recoveryResetError = document.getElementById("recovery-reset-error");
+const btnRecoveryResetCancel = document.getElementById("btn-recovery-reset-cancel");
+
+if (btnToggleRecoveryPw) {
+  btnToggleRecoveryPw.onclick = () => {
+    const isPw = recoveryNewPassword.type === "password";
+    recoveryNewPassword.type = isPw ? "text" : "password";
+    btnToggleRecoveryPw.textContent = isPw ? "HIDE" : "SHOW";
+  };
+}
+
+if (btnRecoveryResetCancel) {
+  btnRecoveryResetCancel.onclick = () => {
+    clearRecoveryState();
+    navigateTo("view-login");
+  };
+}
+
+if (formRecoveryReset) {
+  formRecoveryReset.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (recoveryResetError) {
+      recoveryResetError.style.display = "none";
+      recoveryResetError.textContent = "";
+    }
+
+    const newPwd = recoveryNewPassword.value;
+    const confirmPwd = recoveryConfirmPassword.value;
+
+    if (newPwd !== confirmPwd) {
+      if (recoveryResetError) {
+        recoveryResetError.textContent = "New password and confirmation do not match.";
+        recoveryResetError.style.display = "block";
+      }
+      return;
+    }
+
+    if (!recoveryState.resetToken) {
+      showAlert("error", "Reset session expired. Please restart password recovery.");
+      clearRecoveryState();
+      navigateTo("view-recovery-request");
+      return;
+    }
+
+    const res = await api.resetPassword(recoveryState.resetToken, newPwd);
+    if (res.ok) {
+      showAlert("success", "Password successfully reset! Please sign in with your new password.");
+      clearRecoveryState();
+      navigateTo("view-login");
+    } else {
+      const msg = res.error?.message || "Failed to reset password.";
+      if (recoveryResetError) {
+        recoveryResetError.textContent = msg;
+        recoveryResetError.style.display = "block";
+      } else {
+        showAlert("error", msg);
+      }
     }
   });
 }
@@ -1274,6 +1430,260 @@ if (btnProfileLogout) {
   };
 }
 
+// -----------------------------------------------------------------------------
+// Avatar Lifecycle Handlers (Task 030)
+// -----------------------------------------------------------------------------
+const btnUploadAvatar = document.getElementById("btn-upload-avatar");
+const btnDeleteAvatar = document.getElementById("btn-delete-avatar");
+const inputAvatarFile = document.getElementById("input-avatar-file");
+const avatarStatusMsg = document.getElementById("avatar-status-msg");
+
+if (btnUploadAvatar && inputAvatarFile) {
+  btnUploadAvatar.onclick = () => {
+    inputAvatarFile.click();
+  };
+
+  inputAvatarFile.onchange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (avatarStatusMsg) {
+      avatarStatusMsg.textContent = "UPLOADING...";
+      avatarStatusMsg.style.color = "var(--text-muted)";
+    }
+
+    try {
+      const uploadRes = await api.uploadImage(file);
+      if (!uploadRes.ok) {
+        if (avatarStatusMsg) {
+          avatarStatusMsg.textContent = uploadRes.error?.message || "Upload failed.";
+          avatarStatusMsg.style.color = "var(--destructive)";
+        }
+        return;
+      }
+
+      const imageId = uploadRes.data.id;
+      if (avatarStatusMsg) avatarStatusMsg.textContent = "ASSIGNING AVATAR...";
+
+      const setRes = await api.setAvatar(imageId);
+      if (!setRes.ok) {
+        if (avatarStatusMsg) {
+          avatarStatusMsg.textContent = setRes.error?.message || "Failed to set avatar.";
+          avatarStatusMsg.style.color = "var(--destructive)";
+        }
+        return;
+      }
+
+      if (avatarStatusMsg) {
+        avatarStatusMsg.textContent = "AVATAR UPDATED";
+        avatarStatusMsg.style.color = "var(--success)";
+      }
+      showAlert("success", "Avatar updated successfully.");
+      await loadProfileDetails();
+    } catch (err) {
+      if (avatarStatusMsg) {
+        avatarStatusMsg.textContent = err.message || "Failed to upload avatar.";
+        avatarStatusMsg.style.color = "var(--destructive)";
+      }
+    } finally {
+      inputAvatarFile.value = "";
+    }
+  };
+}
+
+if (btnDeleteAvatar) {
+  btnDeleteAvatar.onclick = async () => {
+    if (avatarStatusMsg) {
+      avatarStatusMsg.textContent = "REMOVING...";
+      avatarStatusMsg.style.color = "var(--text-muted)";
+    }
+    try {
+      const res = await api.deleteAvatar();
+      if (res.ok) {
+        if (avatarStatusMsg) {
+          avatarStatusMsg.textContent = "AVATAR REMOVED";
+          avatarStatusMsg.style.color = "var(--text-muted)";
+        }
+        showAlert("info", "Avatar removed.");
+        await loadProfileDetails();
+      } else {
+        if (avatarStatusMsg) {
+          avatarStatusMsg.textContent = res.error?.message || "Failed to remove avatar.";
+          avatarStatusMsg.style.color = "var(--destructive)";
+        }
+      }
+    } catch (err) {
+      if (avatarStatusMsg) {
+        avatarStatusMsg.textContent = err.message || "Failed to remove avatar.";
+        avatarStatusMsg.style.color = "var(--destructive)";
+      }
+    }
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Email Change Lifecycle Handlers (Task 030)
+// -----------------------------------------------------------------------------
+const formRequestEmailChange = document.getElementById("form-request-email-change");
+const inputNewEmail = document.getElementById("input-new-email");
+const inputEmailChangePassword = document.getElementById("input-email-change-password");
+const emailChangeError = document.getElementById("email-change-error");
+const btnSubmitEmailChange = document.getElementById("btn-submit-email-change");
+
+const emailVerifyStep = document.getElementById("email-verify-step");
+const targetEmailDisplay = document.getElementById("target-email-display");
+const formVerifyEmailChange = document.getElementById("form-verify-email-change");
+const inputEmailOtp = document.getElementById("input-email-otp");
+const emailVerifyError = document.getElementById("email-verify-error");
+const emailVerifySuccess = document.getElementById("email-verify-success");
+const btnSubmitEmailVerify = document.getElementById("btn-submit-email-verify");
+const btnResendEmailOtp = document.getElementById("btn-resend-email-otp");
+const btnCancelEmailChange = document.getElementById("btn-cancel-email-change");
+
+let pendingChangeEmail = "";
+
+if (formRequestEmailChange) {
+  formRequestEmailChange.onsubmit = async (e) => {
+    e.preventDefault();
+    if (emailChangeError) {
+      emailChangeError.style.display = "none";
+      emailChangeError.textContent = "";
+    }
+
+    const newEmail = inputNewEmail ? inputNewEmail.value.trim() : "";
+    const password = inputEmailChangePassword ? inputEmailChangePassword.value : "";
+
+    if (!newEmail || !password) return;
+
+    if (btnSubmitEmailChange) {
+      btnSubmitEmailChange.disabled = true;
+      btnSubmitEmailChange.textContent = "SENDING...";
+    }
+
+    try {
+      const res = await api.requestEmailChange(newEmail, password);
+      if (res.ok) {
+        pendingChangeEmail = newEmail;
+        if (formRequestEmailChange) formRequestEmailChange.style.display = "none";
+        if (emailVerifyStep) emailVerifyStep.style.display = "block";
+        if (targetEmailDisplay) targetEmailDisplay.textContent = newEmail;
+        if (inputEmailOtp) inputEmailOtp.value = "";
+        if (emailVerifyError) emailVerifyError.style.display = "none";
+        showAlert("info", "Verification code sent to your new email address.");
+      } else {
+        const errorMsg = res.error?.message || "Failed to initiate email change.";
+        if (emailChangeError) {
+          emailChangeError.textContent = errorMsg;
+          emailChangeError.style.display = "block";
+        }
+      }
+    } catch (err) {
+      if (emailChangeError) {
+        emailChangeError.textContent = err.message || "An unexpected error occurred.";
+        emailChangeError.style.display = "block";
+      }
+    } finally {
+      if (btnSubmitEmailChange) {
+        btnSubmitEmailChange.disabled = false;
+        btnSubmitEmailChange.textContent = "SEND VERIFICATION CODE";
+      }
+    }
+  };
+}
+
+if (formVerifyEmailChange) {
+  formVerifyEmailChange.onsubmit = async (e) => {
+    e.preventDefault();
+    if (emailVerifyError) {
+      emailVerifyError.style.display = "none";
+      emailVerifyError.textContent = "";
+    }
+
+    const otp = inputEmailOtp ? inputEmailOtp.value.trim() : "";
+    if (!otp) return;
+
+    if (btnSubmitEmailVerify) {
+      btnSubmitEmailVerify.disabled = true;
+      btnSubmitEmailVerify.textContent = "VERIFYING...";
+    }
+
+    try {
+      const res = await api.verifyEmailChange(otp);
+      if (res.ok) {
+        showAlert("success", "Email address updated successfully.");
+        if (emailVerifySuccess) {
+          emailVerifySuccess.textContent = "Email successfully updated!";
+          emailVerifySuccess.style.display = "block";
+        }
+        setTimeout(() => {
+          if (emailVerifyStep) emailVerifyStep.style.display = "none";
+          if (formRequestEmailChange) {
+            formRequestEmailChange.reset();
+            formRequestEmailChange.style.display = "block";
+          }
+          if (emailVerifySuccess) emailVerifySuccess.style.display = "none";
+          loadProfileDetails();
+        }, 1500);
+      } else {
+        const errorMsg = res.error?.message || "Verification failed.";
+        if (emailVerifyError) {
+          emailVerifyError.textContent = errorMsg;
+          emailVerifyError.style.display = "block";
+        }
+      }
+    } catch (err) {
+      if (emailVerifyError) {
+        emailVerifyError.textContent = err.message || "An unexpected error occurred.";
+        emailVerifyError.style.display = "block";
+      }
+    } finally {
+      if (btnSubmitEmailVerify) {
+        btnSubmitEmailVerify.disabled = false;
+        btnSubmitEmailVerify.textContent = "VERIFY & UPDATE EMAIL";
+      }
+    }
+  };
+}
+
+if (btnResendEmailOtp) {
+  btnResendEmailOtp.onclick = async () => {
+    btnResendEmailOtp.disabled = true;
+    btnResendEmailOtp.textContent = "RESENDING...";
+    try {
+      const res = await api.resendEmailChangeOtp();
+      if (res.ok) {
+        showAlert("info", "Verification code resent.");
+      } else {
+        const errorMsg = res.error?.message || "Failed to resend code.";
+        if (emailVerifyError) {
+          emailVerifyError.textContent = errorMsg;
+          emailVerifyError.style.display = "block";
+        }
+      }
+    } catch (err) {
+      if (emailVerifyError) {
+        emailVerifyError.textContent = err.message || "Failed to resend code.";
+        emailVerifyError.style.display = "block";
+      }
+    } finally {
+      btnResendEmailOtp.disabled = false;
+      btnResendEmailOtp.textContent = "RESEND CODE";
+    }
+  };
+}
+
+if (btnCancelEmailChange) {
+  btnCancelEmailChange.onclick = () => {
+    if (emailVerifyStep) emailVerifyStep.style.display = "none";
+    if (formRequestEmailChange) {
+      formRequestEmailChange.reset();
+      formRequestEmailChange.style.display = "block";
+    }
+    if (emailVerifyError) emailVerifyError.style.display = "none";
+    if (emailChangeError) emailChangeError.style.display = "none";
+  };
+}
+
 async function loadProfileDetails() {
   if (!profileDetails) return;
   profileDetails.innerHTML = `<p style="color: var(--text-muted);">[QUERYING_PROFILE_GATEWAY...]</p>`;
@@ -1306,6 +1716,19 @@ async function loadProfileDetails() {
       NOTE: Itemized reputation transaction ledger is maintained internally by InteractionService. Aggregate score authoritative.
     </div>
   `;
+
+  // Update Avatar display
+  const avatarPreviewBox = document.getElementById("avatar-preview-box");
+  const btnDeleteAvatar = document.getElementById("btn-delete-avatar");
+  if (avatarPreviewBox) {
+    if (u.avatar_url) {
+      avatarPreviewBox.innerHTML = `<img src="${u.avatar_url}" alt="Avatar" style="width: 100%; height: 100%; object-fit: cover;" />`;
+      if (btnDeleteAvatar) btnDeleteAvatar.style.display = "inline-flex";
+    } else {
+      avatarPreviewBox.innerHTML = `NO_AVATAR`;
+      if (btnDeleteAvatar) btnDeleteAvatar.style.display = "none";
+    }
+  }
 
   // Load User Bookmarks
   loadUserBookmarks();

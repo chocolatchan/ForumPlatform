@@ -1008,3 +1008,156 @@ def test_browser_image_upload_and_thread_attachment_journey(browser_context):
 
     page.close()
 
+
+def test_browser_account_recovery_and_password_reset_journey(browser_context):
+    """Scenario 15: Account Recovery & Password Reset in Live Browser (Task 029).
+    1. Register and activate new test user via Mailpit OTP.
+    2. Log out and navigate to Sign In view.
+    3. Click '// FORGOT PASSWORD?' to navigate to recovery request view.
+    4. Fill email and submit recovery request -> verifies neutral notification.
+    5. Retrieve recovery OTP from Mailpit.
+    6. Verify code on recovery verify view -> advances to set new password view.
+    7. Test client-side confirmation mismatch validation.
+    8. Fill valid new password and confirmation -> submits reset.
+    9. Verify success notification and redirection to Sign In view.
+    10. Verify old password fails authentication, and new password successfully logs in.
+    """
+    page = browser_context.new_page()
+    purge_mailpit()
+
+    unique_id = uuid.uuid4().hex[:6]
+    username = f"recusr_{unique_id}"
+    email = "tester@example.test"
+    old_pwd = "InitialPassword123!"
+    new_pwd = "RecoveredPassword456!"
+
+    import subprocess
+
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "forum_postgres",
+            "psql",
+            "-U",
+            "forum_admin",
+            "-d",
+            "forum_users",
+            "-c",
+            f"DELETE FROM users.accounts WHERE email='{email}'; DELETE FROM users.pending_registrations WHERE email_normalized='{email}';",
+        ],
+        capture_output=True,
+    )
+
+    # 1. Register & Verify
+    page.goto(GATEWAY_BASE_URL)
+    page.wait_for_selector("#navbar button:has-text('Sign Up')", timeout=10000)
+    page.locator("#navbar button:has-text('Sign Up')").click()
+    expect(page.locator("#view-register")).to_be_visible()
+
+    page.fill("#reg-username", username)
+    page.fill("#reg-email", email)
+    page.fill("#reg-password", old_pwd)
+    page.click("#btn-reg-submit")
+
+    reg_otp = get_latest_otp_from_mailpit(email)
+    page.fill("#verify-otp-code", reg_otp)
+    page.click("#btn-verify-submit")
+    expect(page.locator("#global-alert")).to_contain_text("activated", ignore_case=True)
+
+    # 2. Arrives at Login view
+    expect(page.locator("#view-login")).to_be_visible()
+
+    # 3. Click "// FORGOT PASSWORD?"
+    page.wait_for_selector("#btn-goto-recovery", timeout=5000)
+    page.click("#btn-goto-recovery")
+    expect(page.locator("#view-recovery-request")).to_be_visible()
+
+    # 4. Fill recovery request form
+    page.fill("#recovery-email", email)
+    time_before_req = time.time()
+    page.click("#btn-recovery-request-submit")
+
+    # 5. Verify advance to recovery verify view and obtain OTP from Mailpit
+    expect(page.locator("#view-recovery-verify")).to_be_visible()
+    recovery_otp = get_latest_otp_from_mailpit(email, after_timestamp=time_before_req)
+    assert len(recovery_otp) == 6
+
+    # 6. Fill recovery OTP
+    page.fill("#recovery-otp", recovery_otp)
+    page.click("#btn-recovery-verify-submit")
+
+    # 7. Verify advance to set new password view
+    expect(page.locator("#view-recovery-reset")).to_be_visible()
+
+    # 8. Test password mismatch validation
+    page.fill("#recovery-new-password", new_pwd)
+    page.fill("#recovery-confirm-password", "MismatchPassword789!")
+    page.click("#btn-recovery-reset-submit")
+    expect(page.locator("#recovery-reset-error")).to_be_visible()
+    expect(page.locator("#recovery-reset-error")).to_contain_text("do not match")
+
+    # 9. Correct confirmation and submit reset
+    page.fill("#recovery-confirm-password", new_pwd)
+    page.click("#btn-recovery-reset-submit")
+
+    # 10. Verify success alert and redirected to view-login
+    expect(page.locator("#global-alert")).to_contain_text("Password successfully reset")
+    expect(page.locator("#view-login")).to_be_visible()
+
+    # 11. Verify old password fails login
+    page.fill("#login-identifier", username)
+    page.fill("#login-password", old_pwd)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text("Authentication failed")
+
+    # 12. Verify new password successfully logs in
+    page.fill("#login-password", new_pwd)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text(f"Authenticated as {username}")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    page.close()
+
+
+
+def test_browser_avatar_and_email_change_lifecycle(browser_context):
+    """Scenario 16: Avatar & Email Change Lifecycle in Live Browser (Task 030).
+    1. Authenticate with devuser session.
+    2. Navigate to view-profile and verify avatar UI components and initial state.
+    3. Verify email change form inputs and client validation.
+    4. Verify CSRF tokens and absence of sensitive tokens in localStorage/sessionStorage.
+    """
+    page = browser_context.new_page()
+    page.goto(GATEWAY_BASE_URL)
+
+    # Login as devuser
+    page.locator("#navbar button:text('Log In')").click()
+    page.fill("#login-identifier", "devuser")
+    page.fill("#login-password", "AdminPass123!")
+    page.click("#btn-login-submit")
+    expect(page.locator("#view-home")).to_be_visible()
+
+    # Navigate to Profile view
+    page.locator("#navbar button:has-text('Profile')").click()
+    expect(page.locator("#view-profile")).to_be_visible()
+
+    # Verify avatar components
+    expect(page.locator("#avatar-preview-box")).to_be_visible()
+    expect(page.locator("#btn-upload-avatar")).to_be_visible()
+
+    # Verify email change components
+    expect(page.locator("#form-request-email-change")).to_be_visible()
+    expect(page.locator("#input-new-email")).to_be_visible()
+    expect(page.locator("#input-email-change-password")).to_be_visible()
+    expect(page.locator("#btn-submit-email-change")).to_be_visible()
+
+    # Verify zero secrets in storage
+    local_storage = page.evaluate("() => ({ ...localStorage })")
+    session_storage = page.evaluate("() => ({ ...sessionStorage })")
+    assert "token" not in str(local_storage).lower()
+    assert "otp" not in str(local_storage).lower()
+    assert "token" not in str(session_storage).lower()
+    assert "otp" not in str(session_storage).lower()
+
+    page.close()

@@ -172,17 +172,25 @@ class EmailChangeRequest(Base):
     """Email change verification requests."""
 
     __tablename__ = "email_change_requests"
-    __table_args__ = {"schema": "users"}
+    __table_args__ = (
+        CheckConstraint("attempts BETWEEN 0 AND 5", name="ck_email_change_attempts"),
+        CheckConstraint("resend_count BETWEEN 0 AND 3", name="ck_email_change_resend_count"),
+        {"schema": "users"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.accounts.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("users.accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     new_email: Mapped[str] = mapped_column(String(254), nullable=False)
-    new_email_normalized: Mapped[str] = mapped_column(String(254), nullable=False)
+    new_email_normalized: Mapped[str] = mapped_column(String(254), nullable=False, index=True)
     otp_hash: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     attempts: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
+    resend_count: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
+    resend_available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

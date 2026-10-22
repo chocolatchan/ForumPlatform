@@ -718,6 +718,88 @@
             <button type="submit" class="btn btn-primary" id="btn-login-submit" style="flex: 1;">SIGN_IN</button>
             <button type="button" class="btn" id="btn-goto-register">REGISTER</button>
           </div>
+          <div style="margin-top: 1rem; text-align: center;">
+            <button type="button" class="btn btn-sm" id="btn-goto-recovery" style="border: none; background: transparent; color: var(--text-muted); text-decoration: underline; cursor: pointer;">
+              // FORGOT PASSWORD?
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ======================================================================
+         SCREEN 02B: ACCOUNT RECOVERY & PASSWORD RESET (TASK 029)
+         ====================================================================== -->
+    <section id="view-recovery-request" class="view">
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// PASSWORD_RECOVERY</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          ENTER YOUR REGISTERED EMAIL TO RECEIVE A ONE-TIME VERIFICATION CODE.
+        </p>
+
+        <form id="form-recovery-request">
+          <div class="form-group">
+            <label class="field-label" for="recovery-email">ACCOUNT EMAIL</label>
+            <input type="email" id="recovery-email" class="form-control" autocomplete="email" required />
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-recovery-request-submit" style="flex: 1;">SEND RECOVERY CODE</button>
+            <button type="button" class="btn" id="btn-recovery-back-to-login">CANCEL</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="view-recovery-verify" class="view">
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// VERIFY_RECOVERY_CODE</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem; font-family: var(--font-mono);">
+          ENTER THE 6-DIGIT CODE DISPATCHED TO:
+        </p>
+        <div id="recovery-verify-target-email" style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--primary); margin-bottom: 1.5rem;"></div>
+
+        <form id="form-recovery-verify">
+          <div class="form-group">
+            <label class="field-label" for="recovery-otp">VERIFICATION OTP</label>
+            <input type="text" id="recovery-otp" class="form-control" placeholder="000000" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required />
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-recovery-verify-submit" style="flex: 1;">VERIFY CODE</button>
+            <button type="button" class="btn" id="btn-recovery-verify-cancel">CANCEL</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="view-recovery-reset" class="view">
+      <div class="crosshair-panel" style="max-width: 480px; margin: 2rem auto; padding: 2rem;">
+        <h2 style="font-family: var(--font-mono); font-size: 1.1rem; margin-bottom: 0.5rem;">// SET_NEW_PASSWORD</h2>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1.5rem; font-family: var(--font-mono);">
+          CHOOSE A STRONG PASSWORD WITH AT LEAST 8 CHARACTERS. PREVIOUS PASSWORDS CANNOT BE REUSED.
+        </p>
+
+        <form id="form-recovery-reset">
+          <div class="form-group">
+            <label class="field-label" for="recovery-new-password">NEW PASSWORD</label>
+            <div style="display: flex;">
+              <input type="password" id="recovery-new-password" class="form-control" minlength="8" required />
+              <button type="button" class="btn btn-sm" id="btn-toggle-recovery-pw" style="border-left: 0;">SHOW</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="field-label" for="recovery-confirm-password">CONFIRM NEW PASSWORD</label>
+            <input type="password" id="recovery-confirm-password" class="form-control" minlength="8" required />
+          </div>
+
+          <div id="recovery-reset-error" class="error-banner" style="display: none; margin-top: 0.5rem;"></div>
+
+          <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary" id="btn-recovery-reset-submit" style="flex: 1;">RESET PASSWORD</button>
+            <button type="button" class="btn" id="btn-recovery-reset-cancel">CANCEL</button>
+          </div>
         </form>
       </div>
     </section>
@@ -885,6 +967,66 @@
 
         <div id="profile-details" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; font-family: var(--font-mono); font-size: 0.85rem;">
           <!-- Dynamically populated -->
+        </div>
+
+        <!-- Avatar Mutation Section -->
+        <div style="border-top: 1px solid var(--border); padding-top: 1.5rem; margin-top: 1.5rem;">
+          <div class="sidebar-title">// AVATAR &amp; VISUAL IDENTITY</div>
+          <div style="display: flex; gap: 1.5rem; align-items: center; margin-top: 1rem;">
+            <div id="avatar-preview-box" style="width: 80px; height: 80px; border-radius: 50%; border: 2px solid var(--border); overflow: hidden; background: var(--bg-surface); display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">
+              NO_AVATAR
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+              <input type="file" id="input-avatar-file" accept="image/jpeg,image/png,image/webp" style="display: none;" />
+              <div style="display: flex; gap: 0.5rem;">
+                <button type="button" id="btn-upload-avatar" class="btn btn-sm btn-primary">UPLOAD AVATAR</button>
+                <button type="button" id="btn-delete-avatar" class="btn btn-sm btn-destructive" style="display: none;">REMOVE</button>
+              </div>
+              <div id="avatar-status-msg" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Email Mutation Section -->
+        <div style="border-top: 1px solid var(--border); padding-top: 1.5rem; margin-top: 1.5rem;">
+          <div class="sidebar-title">// EMAIL ADDRESS MUTATION</div>
+          <div id="email-change-section" style="margin-top: 1rem;">
+            <!-- Step 1: Request form -->
+            <form id="form-request-email-change" style="display: flex; flex-direction: column; gap: 1rem;">
+              <div class="form-group">
+                <label class="field-label" for="input-new-email">NEW EMAIL ADDRESS</label>
+                <input type="email" id="input-new-email" class="form-control" placeholder="user@example.com" required />
+              </div>
+              <div class="form-group">
+                <label class="field-label" for="input-email-change-password">CONFIRM CURRENT PASSWORD</label>
+                <input type="password" id="input-email-change-password" class="form-control" autocomplete="current-password" placeholder="••••••••" required />
+              </div>
+              <div id="email-change-error" class="error-banner" style="display: none; margin-top: 0.25rem;"></div>
+              <div style="display: flex; justify-content: flex-start;">
+                <button type="submit" id="btn-submit-email-change" class="btn btn-primary">SEND VERIFICATION CODE</button>
+              </div>
+            </form>
+
+            <!-- Step 2: Verification form (hidden initially) -->
+            <div id="email-verify-step" style="display: none; margin-top: 1rem;">
+              <div style="font-family: var(--font-mono); font-size: 0.8rem; margin-bottom: 0.75rem;">
+                VERIFICATION CODE DISPATCHED TO: <span id="target-email-display" style="font-weight: 700;"></span>
+              </div>
+              <form id="form-verify-email-change" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div class="form-group">
+                  <label class="field-label" for="input-email-otp">6-DIGIT VERIFICATION CODE</label>
+                  <input type="text" id="input-email-otp" class="form-control" maxlength="6" pattern="^[0-9]{6}$" placeholder="000000" required />
+                </div>
+                <div id="email-verify-error" class="error-banner" style="display: none; margin-top: 0.25rem;"></div>
+                <div id="email-verify-success" class="success-banner" style="display: none; margin-top: 0.25rem;"></div>
+                <div style="display: flex; gap: 0.75rem; align-items: center;">
+                  <button type="submit" id="btn-submit-email-verify" class="btn btn-primary">VERIFY &amp; UPDATE EMAIL</button>
+                  <button type="button" id="btn-resend-email-otp" class="btn btn-sm">RESEND CODE</button>
+                  <button type="button" id="btn-cancel-email-change" class="btn btn-sm">CANCEL</button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
 
         <!-- Password Mutation Section -->

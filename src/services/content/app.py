@@ -1435,7 +1435,10 @@ async def serve_image(
             )
 
         # Phase D: Privacy & Visibility Policy Enforcement
-        if attachment.status == "pending":
+        if attachment.status == "avatar":
+            # Active avatars are public
+            pass
+        elif attachment.status == "pending":
             # Pending attachments are strictly private to their author
             if not current_user or current_user.id != attachment.author_id:
                 return error_response(
@@ -1488,12 +1491,15 @@ async def serve_image(
                 request=request,
             )
 
-        # Only published threads are public. Pending and hidden/deleted
+        # Only published threads or active avatars are public. Pending and hidden/deleted
         # attachments must not be stored in shared caches.
         is_public = (
-            attachment.status == "linked"
-            and attachment.thread is not None
-            and attachment.thread.status == "published"
+            attachment.status == "avatar"
+            or (
+                attachment.status == "linked"
+                and attachment.thread is not None
+                and attachment.thread.status == "published"
+            )
         )
         return FileResponse(
             path=str(file_path),
@@ -1505,6 +1511,118 @@ async def serve_image(
         )
 
 
+
+
+# =============================================================================
+# Internal Attachment Management (Avatar Lifecycle)
+# =============================================================================
+@app.post(
+    "/internal/attachments/{attachment_id}/claim-avatar",
+    tags=["Internal"],
+    dependencies=[Depends(verify_internal_service_key)],
+)
+async def claim_avatar_attachment(
+    attachment_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Claim a pending attachment as an active user avatar (Internal only)."""
+    body = await request.json()
+    user_id_str = body.get("user_id")
+    if not user_id_str:
+        return error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="MISSING_USER_ID",
+            message="user_id is required in request payload.",
+            request=request,
+        )
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except ValueError:
+        return error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="INVALID_USER_ID",
+            message="user_id must be a valid UUID.",
+            request=request,
+        )
+
+    async with content_db.transaction() as session:
+        stmt = (
+            select(Attachment)
+            .where(Attachment.id == attachment_id)
+            .with_for_update()
+        )
+        att = (await session.execute(stmt)).scalar_one_or_none()
+        if not att:
+            return error_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="ATTACHMENT_NOT_FOUND",
+                message="Attachment not found.",
+                request=request,
+            )
+
+        if att.author_id != user_id:
+            return error_response(
+                status_code=status.HTTP_403_FORBIDDEN,
+                code="FORBIDDEN_ATTACHMENT_CLAIM",
+                message="Cannot claim an attachment belonging to another user.",
+                request=request,
+            )
+
+        if att.status not in ("pending", "avatar"):
+            return error_response(
+                status_code=status.HTTP_409_CONFLICT,
+                code="INVALID_ATTACHMENT_STATUS",
+                message=f"Attachment cannot be claimed as avatar from status '{att.status}'.",
+                request=request,
+            )
+
+        att.status = "avatar"
+        att.linked_at = datetime.now(UTC)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "id": str(att.id),
+            "object_key": att.object_key,
+            "status": att.status,
+        },
+    )
+
+
+@app.post(
+    "/internal/attachments/{attachment_id}/release-avatar",
+    tags=["Internal"],
+    dependencies=[Depends(verify_internal_service_key)],
+)
+async def release_avatar_attachment(
+    attachment_id: uuid.UUID,
+    request: Request,
+) -> JSONResponse:
+    """Release or delete an avatar attachment when replaced or removed (Internal only)."""
+    async with content_db.transaction() as session:
+        stmt = (
+            select(Attachment)
+            .where(Attachment.id == attachment_id)
+            .with_for_update()
+        )
+        att = (await session.execute(stmt)).scalar_one_or_none()
+        if not att:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={"status": "not_found", "id": str(attachment_id)},
+            )
+
+        # Mark deleted so cleanup / reconciliation purges it safely
+        att.status = "deleted"
+        object_key = att.object_key
+
+    # Unlink file post-commit
+    _remove_stored_file(object_key)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"status": "deleted", "id": str(attachment_id)},
+    )
 
 
 # =============================================================================

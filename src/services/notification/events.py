@@ -8,8 +8,22 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.services.notification.models import ConsumedEvent, NotificationItem, NotificationPreference
+from src.services.notification.auth import get_auth_http_client
+from src.services.notification.config import notification_settings
+from src.services.notification.models import (
+    ConsumedEvent,
+    EmailDelivery,
+    NotificationItem,
+    NotificationPreference,
+)
 from src.services.notification.schemas import ConsumedEventPayload
+from src.services.notification.templates import (
+    RenderedEmail,
+    render_best_answer_email,
+    render_comment_notification_email,
+    render_moderation_email,
+    render_welcome_email,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,58 +105,122 @@ class EventHandlerRegistry:
                 NotificationPreference.user_id == recipient_id
             )
             pref = (await session.execute(pref_stmt)).scalar_one_or_none()
-            # Default preferences: in_app_enabled=True
+            # Default preferences: in_app_enabled=True, email_enabled=False
             in_app_enabled = pref.in_app_enabled if pref is not None else True
+            email_enabled = pref.email_enabled if pref is not None else False
 
-            if not in_app_enabled:
+            created_item: NotificationItem | None = None
+            if in_app_enabled:
+                # 3. Create NotificationItem
+                item = NotificationItem(
+                    id=uuid.uuid4(),
+                    recipient_id=recipient_id,
+                    actor_id=notif_data.get("actor_id"),
+                    type=notif_data["type"],
+                    title=sanitize_text(notif_data["title"], max_len=160),
+                    body=sanitize_text(notif_data["body"], max_len=1000),
+                    target_type=notif_data.get("target_type"),
+                    target_id=notif_data.get("target_id"),
+                    is_read=False,
+                    created_at=datetime.now(UTC),
+                    read_at=None,
+                )
+                session.add(item)
+                created_items.append(item)
+                created_item = item
+            else:
                 logger.info(
                     "Recipient %s has disabled in-app notifications. Skipping notification item creation.",
                     recipient_id,
                 )
-                # Still record event consumption as processed so it won't be retried
-                consumed = ConsumedEvent(
-                    id=uuid.uuid4(),
-                    event_id=event.event_id,
-                    event_type=event.event_type,
-                    recipient_id=recipient_id,
-                    status="skipped_by_preference",
-                    attempts=1,
-                    processed_at=datetime.now(UTC),
-                )
-                session.add(consumed)
-                continue
 
-            # 3. Create NotificationItem
-            item = NotificationItem(
-                id=uuid.uuid4(),
-                recipient_id=recipient_id,
-                actor_id=notif_data.get("actor_id"),
-                type=notif_data["type"],
-                title=sanitize_text(notif_data["title"], max_len=160),
-                body=sanitize_text(notif_data["body"], max_len=1000),
-                target_type=notif_data.get("target_type"),
-                target_id=notif_data.get("target_id"),
-                is_read=False,
-                created_at=datetime.now(UTC),
-                read_at=None,
-            )
-            session.add(item)
-            created_items.append(item)
+            # 4. Outbound email delivery queueing
+            email_delivery_id: uuid.UUID | None = None
+            rendered_email: RenderedEmail | None = notif_data.get("rendered_email")
+            if rendered_email:
+                is_mandatory = rendered_email.category == "mandatory_security"
+                should_send_email = is_mandatory or email_enabled
 
-            # 4. Record ConsumedEvent record atomically
+                if should_send_email:
+                    recipient_email = notif_data.get("recipient_email")
+                    if not recipient_email:
+                        # Resolve email from User Service
+                        recipient_email = await cls._fetch_recipient_email(recipient_id)
+
+                    if recipient_email:
+                        email_delivery = EmailDelivery(
+                            id=uuid.uuid4(),
+                            event_id=event.event_id,
+                            recipient_id=recipient_id,
+                            recipient_email=recipient_email,
+                            subject=rendered_email.subject,
+                            body_text=rendered_email.body_text,
+                            body_html=rendered_email.body_html,
+                            category=rendered_email.category,
+                            status="pending",
+                            attempts=0,
+                            max_attempts=5,
+                            next_attempt_at=datetime.now(UTC),
+                            created_at=datetime.now(UTC),
+                        )
+                        session.add(email_delivery)
+                        email_delivery_id = email_delivery.id
+                    else:
+                        logger.warning(
+                            "Could not resolve recipient email for user %s. Email delivery skipped.",
+                            recipient_id,
+                        )
+
+            # 5. Record ConsumedEvent record atomically
+            status_str = "processed"
+            if not in_app_enabled and email_delivery_id is None:
+                status_str = "skipped_by_preference"
+
+            metadata_dict: dict[str, Any] = {}
+            if created_item:
+                metadata_dict["notification_id"] = str(created_item.id)
+            if email_delivery_id:
+                metadata_dict["email_delivery_id"] = str(email_delivery_id)
+
             consumed = ConsumedEvent(
                 id=uuid.uuid4(),
                 event_id=event.event_id,
                 event_type=event.event_type,
                 recipient_id=recipient_id,
-                status="processed",
+                status=status_str,
                 attempts=1,
                 processed_at=datetime.now(UTC),
-                metadata_={"notification_id": str(item.id)},
+                metadata_=metadata_dict or None,
             )
             session.add(consumed)
 
         return created_items
+
+    @classmethod
+    async def _fetch_recipient_email(cls, user_id: uuid.UUID) -> str | None:
+        """Query User Service internal contact endpoint to resolve recipient's email address."""
+        client = get_auth_http_client()
+        url = f"{notification_settings.user_service_url.rstrip('/')}/internal/users/{user_id}"
+        headers = {
+            "X-Internal-Service-Key": notification_settings.internal_service_secret,
+        }
+        try:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("email")
+            logger.warning(
+                "Failed to fetch user email from %s: status=%d",
+                url,
+                resp.status_code,
+            )
+        except Exception as e:
+            logger.error(
+                "Error connecting to User Service for email lookup of %s: %s",
+                user_id,
+                e,
+            )
+        return None
 
     @staticmethod
     async def _handle_user_registered(event: ConsumedEventPayload) -> list[dict[str, Any]]:
@@ -156,15 +234,21 @@ class EventHandlerRegistry:
             return []
 
         username = event.data.get("username", "there")
+        recipient_email = event.data.get("email")
+
+        rendered = render_welcome_email(username)
+
         return [
             {
                 "recipient_id": recipient_id,
+                "recipient_email": recipient_email,
                 "actor_id": None,
                 "type": "welcome",
                 "title": "Welcome to the Forum!",
                 "body": f"Hello {username}, your account has been registered and verified successfully.",
                 "target_type": "account",
                 "target_id": recipient_id,
+                "rendered_email": rendered,
             }
         ]
 
@@ -193,6 +277,8 @@ class EventHandlerRegistry:
         title = "New reply to your comment" if parent_comment_id else "New comment on your thread"
         body = event.data.get("body_preview") or "Someone commented on your discussion."
 
+        rendered = render_comment_notification_email(title, body)
+
         return [
             {
                 "recipient_id": recipient_id,
@@ -202,6 +288,7 @@ class EventHandlerRegistry:
                 "body": body,
                 "target_type": "comment",
                 "target_id": comment_id,
+                "rendered_email": rendered,
             }
         ]
 
@@ -222,6 +309,8 @@ class EventHandlerRegistry:
         except ValueError:
             return []
 
+        rendered = render_best_answer_email()
+
         return [
             {
                 "recipient_id": recipient_id,
@@ -231,6 +320,7 @@ class EventHandlerRegistry:
                 "body": "The author accepted your answer as the best answer for their thread.",
                 "target_type": "thread",
                 "target_id": thread_id or comment_id,
+                "rendered_email": rendered,
             }
         ]
 
@@ -267,6 +357,7 @@ class EventHandlerRegistry:
                 "body": f"Your {target_type} received a new upvote.",
                 "target_type": target_type,
                 "target_id": target_id,
+                "rendered_email": None,
             }
         ]
 
@@ -306,6 +397,12 @@ class EventHandlerRegistry:
         }
         title = action_titles.get(action_str, f"Moderation action applied: {action_str}")
 
+        rendered = render_moderation_email(
+            action=action_str,
+            target_type=str(target_type),
+            reason=str(reason),
+        )
+
         return [
             {
                 "recipient_id": recipient_id,
@@ -315,5 +412,7 @@ class EventHandlerRegistry:
                 "body": f"Reason: {reason}",
                 "target_type": target_type,
                 "target_id": target_id,
+                "rendered_email": rendered,
             }
         ]
+

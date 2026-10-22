@@ -144,6 +144,27 @@ export class ApiClient {
     });
   }
 
+  async requestRecovery(email) {
+    return this.request("/auth/recovery/request", {
+      method: "POST",
+      body: { email },
+    });
+  }
+
+  async verifyRecovery(email, otp) {
+    return this.request("/auth/recovery/verify", {
+      method: "POST",
+      body: { email, otp },
+    });
+  }
+
+  async resetPassword(resetToken, newPassword) {
+    return this.request("/auth/recovery/reset", {
+      method: "POST",
+      body: { reset_token: resetToken, new_password: newPassword },
+    });
+  }
+
   async logout() {
     return this.request("/auth/logout", {
       method: "POST",
@@ -169,6 +190,46 @@ export class ApiClient {
         current_password: currentPassword,
         new_password: newPassword,
       },
+    });
+  }
+
+  async setAvatar(imageId) {
+    return this.request("/profile/avatar", {
+      method: "PUT",
+      body: {
+        image_id: imageId,
+      },
+    });
+  }
+
+  async deleteAvatar() {
+    return this.request("/profile/avatar", {
+      method: "DELETE",
+    });
+  }
+
+  async requestEmailChange(newEmail, password) {
+    return this.request("/profile/change-email/request", {
+      method: "POST",
+      body: {
+        new_email: newEmail,
+        password: password,
+      },
+    });
+  }
+
+  async verifyEmailChange(otp) {
+    return this.request("/profile/change-email/verify", {
+      method: "POST",
+      body: {
+        otp: otp,
+      },
+    });
+  }
+
+  async resendEmailChangeOtp() {
+    return this.request("/profile/change-email/resend-otp", {
+      method: "POST",
     });
   }
 

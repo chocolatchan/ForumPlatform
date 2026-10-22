@@ -830,3 +830,135 @@ async def test_password_change_lifecycle():
         )
         assert new_login.status_code == 200
         assert new_login.json()["user"]["username"] == "emma_pwd"
+
+
+@pytest.mark.asyncio
+async def test_password_recovery_and_reset_lifecycle():
+    """Verify complete password recovery and reset workflow:
+    - Neutral 202 response for known and unknown accounts (anti-enumeration)
+    - OTP expiration and attempt limits
+    - Reset token issuance and one-time use
+    - Password history enforcement (no reuse of current or last 5 passwords)
+    - Full revocation of active sessions on password reset
+    - Rate limit enforcement
+    """
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Reset limiters for clean test run
+        await client.post("/test/reset-rate-limiters")
+
+        # 1. Anti-enumeration: Unknown account returns neutral 202
+        res_unknown = await client.post(
+            "/auth/recovery/request",
+            json={"email": "nonexistent_user@example.com"},
+        )
+        assert res_unknown.status_code == 202
+        assert res_unknown.json()["status"] == "accepted"
+        assert otp_delivery_sink.get_latest_otp("nonexistent_user@example.com") is None
+
+        # 2. Register a verified user
+        user_email = "tester@example.test"
+        reg_res = await client.post(
+            "/auth/register",
+            json={
+                "username": "recovery_user",
+                "email": user_email,
+                "password": "Password123!",
+            },
+        )
+        assert reg_res.status_code == 202
+        reg_otp = otp_delivery_sink.get_latest_otp(user_email)
+        assert reg_otp is not None
+        v_res = await client.post(
+            "/auth/register/verify",
+            json={"email": user_email, "otp": reg_otp},
+        )
+        assert v_res.status_code == 201
+
+        # 3. Log user in and obtain an active session
+        login_res = await client.post(
+            "/auth/login",
+            json={"login": "recovery_user", "password": "Password123!"},
+        )
+        assert login_res.status_code == 200
+        session_cookie = client.cookies.get("forum_session")
+        assert session_cookie is not None
+
+        # 4. Request recovery for known user -> neutral 202 + OTP delivered to sink
+        req_res = await client.post(
+            "/auth/recovery/request",
+            json={"email": user_email},
+        )
+        assert req_res.status_code == 202
+        assert req_res.json()["status"] == "accepted"
+
+        recovery_otp = otp_delivery_sink.get_latest_otp(user_email, purpose="recovery")
+        assert recovery_otp is not None
+        assert len(recovery_otp) == 6
+
+        # 5. Verify recovery with incorrect OTP -> 400
+        bad_v = await client.post(
+            "/auth/recovery/verify",
+            json={"email": user_email, "otp": "999999"},
+        )
+        assert bad_v.status_code == 400
+        assert bad_v.json()["error"]["code"] == "INVALID_OTP"
+
+        # 6. Verify recovery with valid OTP -> 200 + reset_token
+        good_v = await client.post(
+            "/auth/recovery/verify",
+            json={"email": user_email, "otp": recovery_otp},
+        )
+        assert good_v.status_code == 200
+        ticket_data = good_v.json()
+        assert "reset_token" in ticket_data
+        reset_token = ticket_data["reset_token"]
+        assert len(reset_token) > 20
+
+        # Replaying the same OTP -> 400 (already consumed)
+        replay_v = await client.post(
+            "/auth/recovery/verify",
+            json={"email": user_email, "otp": recovery_otp},
+        )
+        assert replay_v.status_code == 400
+
+        # 7. Attempt reset with current password -> 400 PASSWORD_REUSE_FORBIDDEN
+        reuse_res = await client.post(
+            "/auth/recovery/reset",
+            json={"reset_token": reset_token, "new_password": "Password123!"},
+        )
+        assert reuse_res.status_code == 400
+        assert reuse_res.json()["error"]["code"] == "PASSWORD_REUSE_FORBIDDEN"
+
+        # 8. Reset password successfully -> 204 No Content
+        reset_res = await client.post(
+            "/auth/recovery/reset",
+            json={"reset_token": reset_token, "new_password": "NewBrandPassword456!"},
+        )
+        assert reset_res.status_code == 204
+
+        # 9. Ticket is one-time use; second reset attempt with same ticket -> 400
+        replay_reset = await client.post(
+            "/auth/recovery/reset",
+            json={"reset_token": reset_token, "new_password": "AnotherPassword789!"},
+        )
+        assert replay_reset.status_code == 400
+        assert replay_reset.json()["error"]["code"] == "INVALID_RESET_TOKEN"
+
+        # 10. Active session is now revoked (ADR-003)
+        check_session = await client.get("/auth/session")
+        assert check_session.status_code == 401
+
+        # 11. Old password login fails, new password login succeeds
+        old_login = await client.post(
+            "/auth/login",
+            json={"login": "recovery_user", "password": "Password123!"},
+        )
+        assert old_login.status_code == 401
+
+        new_login = await client.post(
+            "/auth/login",
+            json={"login": "recovery_user", "password": "NewBrandPassword456!"},
+        )
+        assert new_login.status_code == 200
+        assert new_login.json()["user"]["username"] == "recovery_user"

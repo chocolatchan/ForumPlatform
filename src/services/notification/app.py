@@ -22,6 +22,7 @@ from src.services.notification.auth import (
 )
 from src.services.notification.config import notification_settings
 from src.services.notification.database import notification_db
+from src.services.notification.email_worker import EmailDispatchWorker
 from src.services.notification.events import EventHandlerRegistry
 from src.services.notification.models import NotificationItem, NotificationPreference
 from src.services.notification.schemas import (
@@ -34,11 +35,16 @@ metrics_registry = MetricsRegistry(notification_settings.service_name)
 
 DEFAULT_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
+email_dispatch_worker = EmailDispatchWorker(notification_db)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await email_dispatch_worker.start()
     yield
+    await email_dispatch_worker.stop()
     await notification_db.close()
+
 
 
 app = FastAPI(

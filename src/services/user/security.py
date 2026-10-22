@@ -62,6 +62,11 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_reset_token() -> str:
+    """Generate a cryptographically secure reset token (256-bit URL-safe)."""
+    return secrets.token_urlsafe(32)
+
+
 def generate_csrf_token(secret: str = "default-dev-csrf-secret") -> str:
     """Generate a synchronizer CSRF token (ADR-004)."""
     random_part = secrets.token_hex(16)
