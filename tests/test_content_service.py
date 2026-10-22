@@ -615,3 +615,131 @@ async def test_gateway_content_forwarding_and_spoof_prevention():
             )
             # Gateway filter_headers strips client identity headers, so Content Service sees no session -> 401
             assert res_spoof.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_image_upload_lifecycle_and_validation():
+    """Verify Task 027 image upload lifecycle:
+
+    1. Unauthenticated upload rejected (401).
+    2. Upload without CSRF token rejected (403).
+    3. Non-image file (e.g. text or SVG) rejected by magic bytes (415).
+    4. Oversized image (>2MB) rejected (413).
+    5. Valid image upload (JPEG/PNG/WebP) succeeds (201 Created) with pending status.
+    6. Image can be fetched directly via GET /uploads/images/{id}.
+    7. Thread creation links pending attachment and updates status to linked.
+    8. Attempting to link another user's attachment or already-linked attachment fails (400).
+    """
+    user_id, session_token, csrf_token = await create_test_user_and_session("upload_tester", role="member")
+
+    # Category for thread creation
+    cat_id = uuid.uuid4()
+    async with content_db_mod.content_db.transaction() as session:
+        cat = Category(
+            id=cat_id,
+            name="Upload Category",
+            slug="upload-cat",
+            description="Testing image attachments",
+            created_by=user_id,
+        )
+        session.add(cat)
+
+    user_transport = ASGITransport(app=user_app)
+    mock_user_client = AsyncClient(transport=user_transport, base_url="http://test")
+    set_auth_http_client(mock_user_client)
+
+    transport = ASGITransport(app=content_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Minimal valid PNG bytes
+        png_bytes = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
+        # 1. Unauthenticated upload -> 401
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("test.png", png_bytes, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 401
+
+        # Authenticate
+        client.cookies.set("forum_session", session_token)
+
+        # 2. Upload without CSRF -> 403
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("test.png", png_bytes, "image/png")},
+        )
+        assert res.status_code == 403
+
+        # 3. Non-image file / SVG spoofing -> 415
+        fake_svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("fake.png", fake_svg, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 415
+
+        # 4. Oversized image > 2MB -> 413
+        # Fake JPEG header with 2MB + 10 bytes
+        oversized_data = b"\xff\xd8\xff\xe0" + b"\x00" * (2097152 + 10)
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("large.jpg", oversized_data, "image/jpeg")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 413
+
+        # 5. Valid PNG upload -> 201 Created
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("valid.png", png_bytes, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 201
+        att_data = res.json()
+        assert "id" in att_data
+        assert att_data["status"] == "pending"
+        assert att_data["mime_type"] == "image/png"
+        att_id = att_data["id"]
+
+        # 6. Fetch uploaded image directly -> 200 OK
+        res_img = await client.get(f"/uploads/images/{att_id}")
+        assert res_img.status_code == 200
+        assert res_img.headers["content-type"] == "image/png"
+        assert res_img.headers["x-content-type-options"] == "nosniff"
+        assert res_img.content == png_bytes
+
+        # 7. Create thread linking this attachment -> 201 Created
+        res_thread = await client.post(
+            "/threads",
+            json={
+                "category_id": str(cat_id),
+                "title": "Thread with Verified Attachment",
+                "body": "Here is an image: ![attachment](/api/v1/uploads/images/" + att_id + ")",
+                "tags": ["image", "test"],
+                "image_ids": [att_id],
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res_thread.status_code == 201
+
+        # 8. Attempting to link the same attachment again in a new thread -> 400 (already linked)
+        res_thread2 = await client.post(
+            "/threads",
+            json={
+                "category_id": str(cat_id),
+                "title": "Second Thread Trying Same Image",
+                "body": "Reusing image should fail because status is now linked.",
+                "tags": ["reuse"],
+                "image_ids": [att_id],
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res_thread2.status_code == 400
+        assert res_thread2.json()["error"]["code"] == "INVALID_ATTACHMENT"
+

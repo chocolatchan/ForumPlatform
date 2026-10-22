@@ -114,3 +114,16 @@ class CommentResponse(BaseModel):
 class CommentPageResponse(BaseModel):
     items: list[CommentResponse]
     next_cursor: str | None = None
+
+
+# =============================================================================
+# Attachment Schemas
+# =============================================================================
+class AttachmentResponse(BaseModel):
+    id: uuid.UUID
+    object_key: str
+    file_size: int
+    mime_type: str
+    status: str
+    created_at: datetime
+

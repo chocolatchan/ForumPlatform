@@ -7,14 +7,13 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, Query, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from src.common.errors import (
     error_response,
-    not_implemented_response,
     register_canonical_error_handlers,
 )
 from src.common.logging import configure_logging
@@ -30,6 +29,7 @@ from src.services.content.auth import (
 from src.services.content.config import content_settings
 from src.services.content.database import content_db
 from src.services.content.models import (
+    Attachment,
     Category,
     Comment,
     ConsumedEvent,
@@ -38,6 +38,7 @@ from src.services.content.models import (
     ThreadTag,
 )
 from src.services.content.schemas import (
+    AttachmentResponse,
     BestAnswerRequest,
     CreateCategoryRequest,
     CreateCommentRequest,
@@ -47,6 +48,13 @@ from src.services.content.schemas import (
     LockThreadRequest,
     PinThreadRequest,
     UpdateCategoryRequest,
+)
+from src.services.content.storage import (
+    MAX_FILE_SIZE_BYTES,
+    ensure_storage_dir,
+    generate_object_key,
+    get_absolute_file_path,
+    sniff_image_type,
 )
 
 configure_logging(content_settings.service_name, content_settings.log_level)
@@ -413,6 +421,29 @@ async def create_thread(
 
         await session.flush()
 
+        # Validate and associate attachments if provided
+        linked_attachment_ids: list[uuid.UUID] = []
+        if req.image_ids:
+            # Query attachments belonging to author and in pending state
+            att_stmt = select(Attachment).where(
+                Attachment.id.in_(req.image_ids),
+                Attachment.author_id == current_user.id,
+                Attachment.status == "pending",
+            )
+            attachments = (await session.execute(att_stmt)).scalars().all()
+            if len(attachments) != len(req.image_ids):
+                return error_response(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code="INVALID_ATTACHMENT",
+                    message="One or more attachments are invalid, do not belong to you, or have already been linked.",
+                    request=request,
+                )
+            for att in attachments:
+                att.thread_id = new_thread.id
+                att.status = "linked"
+                att.linked_at = datetime.now(UTC)
+                linked_attachment_ids.append(att.id)
+
         # Outbox event
         outbox = ContentOutboxEvent(
             id=uuid.uuid4(),
@@ -426,6 +457,7 @@ async def create_thread(
                 "title": new_thread.title,
                 "status": new_thread.status,
                 "tags": [t.tag for t in tag_objects],
+                "image_ids": [str(att_id) for att_id in linked_attachment_ids],
             },
         )
         session.add(outbox)
@@ -1004,9 +1036,128 @@ async def delete_comment(
 # =============================================================================
 # Uploads
 # =============================================================================
-@app.post("/uploads/images", tags=["Uploads"])
-async def upload_image(request: Request) -> JSONResponse:
-    return not_implemented_response(request, "POST /uploads/images")
+@app.post(
+    "/uploads/images",
+    tags=["Uploads"],
+    dependencies=[Depends(verify_csrf_header)],
+    response_model=AttachmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: ContentUser = Depends(get_current_user),
+) -> JSONResponse:
+    """Upload an image attachment. Validates format via magic bytes and enforces 2MB limit."""
+    # Read first chunk to inspect magic bytes
+    header_chunk = await file.read(512)
+    if not header_chunk:
+        return error_response(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code="UNSUPPORTED_MEDIA_TYPE",
+            message="Uploaded file is empty or invalid.",
+            request=request,
+        )
+
+    sniffed_mime = sniff_image_type(header_chunk)
+    if not sniffed_mime:
+        return error_response(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code="UNSUPPORTED_MEDIA_TYPE",
+            message="Unsupported media type. Only raster images (image/jpeg, image/png, image/webp) are accepted.",
+            request=request,
+        )
+
+    # Stream the remainder while tracking size
+    total_size = len(header_chunk)
+    chunks = [header_chunk]
+
+    chunk_size = 64 * 1024
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > MAX_FILE_SIZE_BYTES:
+            return error_response(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                code="PAYLOAD_TOO_LARGE",
+                message=f"File size exceeds maximum allowed limit of {MAX_FILE_SIZE_BYTES} bytes (2 MB).",
+                request=request,
+            )
+        chunks.append(chunk)
+
+    attachment_id = uuid.uuid4()
+    object_key = generate_object_key(attachment_id, sniffed_mime)
+
+    # Write to local persistent storage
+    ensure_storage_dir(content_settings.storage_local_dir)
+    target_path = get_absolute_file_path(content_settings.storage_local_dir, object_key)
+
+    with open(target_path, "wb") as f:
+        for chunk in chunks:
+            f.write(chunk)
+
+    # Persist metadata to database
+    async with content_db.transaction() as session:
+        attachment = Attachment(
+            id=attachment_id,
+            thread_id=None,
+            author_id=current_user.id,
+            object_key=object_key,
+            file_size=total_size,
+            mime_type=sniffed_mime,
+            status="pending",
+        )
+        session.add(attachment)
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": str(attachment.id),
+            "object_key": attachment.object_key,
+            "file_size": attachment.file_size,
+            "mime_type": attachment.mime_type,
+            "status": attachment.status,
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+    )
+
+
+@app.get("/uploads/images/{image_id}", tags=["Uploads"])
+async def serve_image(image_id: uuid.UUID, request: Request) -> Response:
+    """Serve image attachment directly."""
+    async with content_db.session() as session:
+        stmt = select(Attachment).where(Attachment.id == image_id)
+        attachment = (await session.execute(stmt)).scalar_one_or_none()
+        if not attachment or attachment.status == "deleted":
+            return error_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="ATTACHMENT_NOT_FOUND",
+                message=f"Attachment with ID '{image_id}' not found.",
+                request=request,
+            )
+
+        file_path = get_absolute_file_path(
+            content_settings.storage_local_dir, attachment.object_key
+        )
+        if not file_path.exists() or not file_path.is_file():
+            return error_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="ATTACHMENT_FILE_MISSING",
+                message="Attachment file is missing from storage.",
+                request=request,
+            )
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=attachment.mime_type,
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
 
 
 # =============================================================================

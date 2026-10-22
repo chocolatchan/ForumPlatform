@@ -869,6 +869,84 @@ if (mdBtnBold) mdBtnBold.onclick = () => insertMarkdownWrap("**", "**");
 if (mdBtnCode) mdBtnCode.onclick = () => insertMarkdownWrap("`", "`");
 if (mdBtnQuote) mdBtnQuote.onclick = () => insertMarkdownWrap("> ", "");
 
+// Image Uploads for Thread Editor
+const threadImageInput = document.getElementById("thread-image-input");
+const btnUploadImage = document.getElementById("btn-upload-image");
+const threadAttachmentsList = document.getElementById("thread-attachments-list");
+const uploadStatus = document.getElementById("upload-status");
+
+let pendingAttachmentIds = [];
+
+function renderAttachmentChips() {
+  if (!threadAttachmentsList) return;
+  threadAttachmentsList.innerHTML = "";
+  pendingAttachmentIds.forEach((att) => {
+    const chip = document.createElement("div");
+    chip.style = "display: inline-flex; align-items: center; gap: 0.5rem; background: var(--bg-surface-elevated, #1a1a24); border: 1px solid var(--border-color, #2d2d3d); padding: 0.25rem 0.5rem; font-family: var(--font-mono); font-size: 0.75rem;";
+    chip.innerHTML = `
+      <span>IMG: ${att.id.slice(0, 8)} (${(att.file_size / 1024).toFixed(1)} KB)</span>
+      <button type="button" style="background: none; border: none; color: var(--color-danger, #ff5555); cursor: pointer; font-size: 0.9rem;" title="Remove">&times;</button>
+    `;
+    chip.querySelector("button").onclick = () => {
+      pendingAttachmentIds = pendingAttachmentIds.filter((item) => item.id !== att.id);
+      renderAttachmentChips();
+    };
+    threadAttachmentsList.appendChild(chip);
+  });
+}
+
+if (btnUploadImage && threadImageInput) {
+  btnUploadImage.onclick = async () => {
+    const file = threadImageInput.files?.[0];
+    if (!file) {
+      showAlert("error", "Please select an image file to upload.");
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      showAlert("error", "Image size exceeds 2 MB limit.");
+      return;
+    }
+
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      showAlert("error", "Only JPG, PNG, and WebP images are supported.");
+      return;
+    }
+
+    btnUploadImage.disabled = true;
+    if (uploadStatus) uploadStatus.textContent = "Uploading...";
+
+    try {
+      const res = await api.uploadImage(file);
+      if (res.ok && res.data?.id) {
+        pendingAttachmentIds.push(res.data);
+        renderAttachmentChips();
+        threadImageInput.value = "";
+        if (uploadStatus) uploadStatus.textContent = "Uploaded successfully.";
+        // Automatically insert markdown image tag into body
+        const imgMd = `\n![attachment](/api/v1/uploads/images/${res.data.id})\n`;
+        if (threadContentInput) {
+          threadContentInput.value += imgMd;
+          if (bodyCharCounter) {
+            bodyCharCounter.textContent = `${threadContentInput.value.length} / 50000`;
+          }
+        }
+        showAlert("success", "Image uploaded and attached to markdown specification.");
+      } else {
+        const msg = res.error?.message || "Failed to upload image.";
+        showAlert("error", msg);
+        if (uploadStatus) uploadStatus.textContent = `Upload failed: ${msg}`;
+      }
+    } catch (err) {
+      showAlert("error", `Upload failed: ${err.message}`);
+      if (uploadStatus) uploadStatus.textContent = "Upload failed.";
+    } finally {
+      btnUploadImage.disabled = false;
+    }
+  };
+}
+
 async function loadCategoriesForThreadCreation() {
   if (!threadCategorySelect) return;
   const res = await api.getCategories();
@@ -890,10 +968,14 @@ if (formCreateThread) {
       return;
     }
 
-    const res = await api.createThread(title, body, categoryId);
+    const imageIds = pendingAttachmentIds.map((a) => a.id);
+    const res = await api.createThread(title, body, categoryId, imageIds);
     if (res.ok && res.data?.id) {
       showAlert("success", "Discussion thread published successfully.");
       formCreateThread.reset();
+      pendingAttachmentIds = [];
+      renderAttachmentChips();
+      if (uploadStatus) uploadStatus.textContent = "";
       navigateTo("view-home", true);
     } else {
       showAlert("error", `Failed to publish thread: ${res.error?.message || "Internal error."}`);

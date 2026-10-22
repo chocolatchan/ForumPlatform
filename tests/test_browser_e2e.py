@@ -919,3 +919,93 @@ def test_browser_profile_password_change_journey(browser_context):
     expect(page.locator("#global-alert")).to_contain_text(username)
 
     page.close()
+
+
+def test_browser_image_upload_and_thread_attachment_journey(browser_context):
+    """Scenario 18: Member logs in, uploads image attachment in thread editor, verifies preview & markdown insertion, and publishes thread."""
+    purge_mailpit()
+    reset_user_service_rate_limiters()
+
+    unique_suffix = uuid.uuid4().hex[:6]
+    username = f"imgauthor_{unique_suffix}"
+    email = "tester@example.test"
+    password = "SecurePassword123!"
+
+    import subprocess
+
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "forum_postgres",
+            "psql",
+            "-U",
+            "forum_admin",
+            "-d",
+            "forum_users",
+            "-c",
+            f"DELETE FROM users.accounts WHERE email='{email}'; DELETE FROM users.pending_registrations WHERE email_normalized='{email}';",
+        ],
+        capture_output=True,
+    )
+
+    page = browser_context.new_page()
+    page.goto("/")
+
+    # 1. Register & verify OTP
+    page.wait_for_selector("#navbar button:has-text('Sign Up')", timeout=10000)
+    page.locator("#navbar button:has-text('Sign Up')").click()
+    page.fill("#reg-username", username)
+    page.fill("#reg-email", email)
+    page.fill("#reg-password", password)
+    page.click("#btn-reg-submit")
+
+    otp = get_latest_otp_from_mailpit(email)
+    page.fill("#verify-otp-code", otp)
+    page.click("#btn-verify-submit")
+
+    # 2. Login
+    page.fill("#login-identifier", username)
+    page.fill("#login-password", password)
+    page.click("#btn-login-submit")
+    expect(page.locator("#global-alert")).to_contain_text(username)
+
+    # 3. Navigate to thread creator
+    page.click("#btn-create-thread-view")
+    expect(page.locator("#view-create-thread")).to_be_visible()
+
+    # 4. Fill thread title and select category
+    page.fill("#thread-title", f"Architectural Overview with Blueprint {unique_suffix}")
+    page.select_option("#thread-category", index=0)
+    page.fill("#thread-content", "Initial technical specification description with detailed components.")
+
+    # 5. Set up a valid 1x1 PNG file to upload
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    page.set_input_files(
+        "#thread-image-input",
+        {"name": "diagram.png", "mimeType": "image/png", "buffer": png_bytes},
+    )
+
+    # 6. Click upload attachment
+    page.click("#btn-upload-image")
+    expect(page.locator("#global-alert")).to_contain_text("attached to markdown")
+    expect(page.locator("#thread-attachments-list")).to_contain_text("IMG:")
+
+    # Verify markdown inserted into body
+    body_val = page.locator("#thread-content").input_value()
+    assert "/api/v1/uploads/images/" in body_val
+
+    # 7. Publish thread
+    page.click("#btn-submit-thread")
+    expect(page.locator("#global-alert")).to_contain_text("published successfully")
+
+    # 8. Verify thread appears on home feed
+    expect(page.locator("#view-home")).to_be_visible()
+    expect(page.locator("#thread-container")).to_contain_text(f"Architectural Overview with Blueprint {unique_suffix}")
+
+    page.close()
+

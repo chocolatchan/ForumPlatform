@@ -201,10 +201,19 @@ export class ApiClient {
     });
   }
 
-  async createThread(title, body, categoryId) {
+  async createThread(title, body, categoryId, imageIds = []) {
     return this.request("/threads", {
       method: "POST",
-      body: { title, body, category_id: categoryId },
+      body: { title, body, category_id: categoryId, image_ids: imageIds },
+    });
+  }
+
+  async uploadImage(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    return this.request("/uploads/images", {
+      method: "POST",
+      body: formData,
     });
   }
 

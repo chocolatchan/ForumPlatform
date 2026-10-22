@@ -12,3 +12,7 @@ __pycache__/
 docs/audit/performance/**/*.jsonl
 *.jsonl
 
+# Upload storage directory
+uploads/
+
+

@@ -793,6 +793,21 @@
             <textarea id="thread-content" class="form-control" rows="8" placeholder="Enter content formatted in markdown..." required></textarea>
           </div>
 
+          <!-- Image Attachments Section -->
+          <div class="form-group" style="margin-top: 1rem;">
+            <label class="field-label" for="thread-image-input">
+              <span>ATTACHMENTS (JPG, PNG, WEBP &le; 2MB)</span>
+              <span id="upload-status" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);"></span>
+            </label>
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
+              <input type="file" id="thread-image-input" class="form-control" accept="image/jpeg,image/png,image/webp" style="max-width: 320px;" />
+              <button type="button" class="btn btn-sm" id="btn-upload-image">UPLOAD ATTACHMENT</button>
+            </div>
+            <div id="thread-attachments-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+              <!-- Dynamic attachment chips -->
+            </div>
+          </div>
+
           <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
             <button type="submit" class="btn btn-primary" id="btn-submit-thread">PUBLISH THREAD</button>
             <button type="button" class="btn" id="btn-cancel-create-thread">CANCEL</button>

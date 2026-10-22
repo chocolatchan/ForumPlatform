@@ -118,6 +118,8 @@ services:
       INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-default-dev-internal-key}
     ports:
       - "8002:8002"
+    volumes:
+      - content_uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -298,3 +300,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  content_uploads:
