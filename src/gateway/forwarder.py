@@ -54,6 +54,11 @@ def filter_headers(headers: httpx.Headers | dict[str, str]) -> dict[str, str]:
     }
 
 
+# Maximum request body size accepted by API Gateway (5 MB)
+# Allows 2 MB image file payload + multipart boundary/headers + JSON payloads
+MAX_GATEWAY_BODY_SIZE_BYTES = 5242880
+
+
 async def forward_request(
     client: httpx.AsyncClient,
     request: Request,
@@ -63,8 +68,49 @@ async def forward_request(
     """Stream an incoming HTTP request to upstream service and return response."""
     outgoing_headers = filter_headers(dict(request.headers))
     outgoing_headers["X-Request-ID"] = request_id
-    # Read incoming request body
-    body = await request.body()
+
+    # 1. Enforce Gateway-level Content-Length check
+    content_length_header = request.headers.get("content-length")
+    if content_length_header:
+        try:
+            cl = int(content_length_header)
+            if cl > MAX_GATEWAY_BODY_SIZE_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    headers={"X-Request-ID": request_id},
+                    content={
+                        "error": {
+                            "code": "PAYLOAD_TOO_LARGE",
+                            "message": f"Request body exceeds maximum gateway limit of {MAX_GATEWAY_BODY_SIZE_BYTES} bytes (5 MB).",
+                            "details": [],
+                            "request_id": request_id,
+                        }
+                    },
+                )
+        except ValueError:
+            pass
+
+    # 2. Stream-buffer incoming request body with strict size ceiling
+    body_chunks = []
+    total_received = 0
+    async for chunk in request.stream():
+        total_received += len(chunk)
+        if total_received > MAX_GATEWAY_BODY_SIZE_BYTES:
+            return JSONResponse(
+                status_code=413,
+                headers={"X-Request-ID": request_id},
+                content={
+                    "error": {
+                        "code": "PAYLOAD_TOO_LARGE",
+                        "message": f"Request body exceeds maximum gateway limit of {MAX_GATEWAY_BODY_SIZE_BYTES} bytes (5 MB).",
+                        "details": [],
+                        "request_id": request_id,
+                    }
+                },
+            )
+        body_chunks.append(chunk)
+
+    body = b"".join(body_chunks)
 
     try:
         upstream_req = client.build_request(

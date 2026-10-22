@@ -109,6 +109,15 @@ async def get_current_user(request: Request) -> ContentUser:
     )
 
 
+async def get_optional_current_user(request: Request) -> ContentUser | None:
+    """Optionally resolve current user from session cookie; returns None if unauthenticated."""
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
+
+
+
 def require_role(*allowed_roles: str):
     """Enforce role authorization on protected content endpoints."""
 

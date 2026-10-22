@@ -18,6 +18,9 @@ class ContentSettings(BaseServiceSettings):
     storage_backend: str = "local"
     storage_local_dir: str = "./uploads"
     storage_max_file_size_bytes: int = 2097152
+    attachment_pending_ttl_seconds: int = 86400
+    attachment_cleanup_interval_seconds: int = 3600
+    attachment_cleanup_batch_size: int = 100
 
     # User Service / Auth integration
     user_service_url: str = Field(default="http://localhost:8001")

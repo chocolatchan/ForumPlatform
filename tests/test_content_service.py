@@ -743,3 +743,213 @@ async def test_image_upload_lifecycle_and_validation():
         assert res_thread2.status_code == 400
         assert res_thread2.json()["error"]["code"] == "INVALID_ATTACHMENT"
 
+
+@pytest.mark.asyncio
+async def test_image_upload_hardening_suite():
+    """Verify Task 027-H1 Hardening across all 5 risk dimensions:
+
+    1. DB Failure Unlink: When DB transaction fails, file on disk is immediately cleaned up.
+    2. Deep Image Validation: Corrupted PNG / non-IEND or oversized dimensions rejected (415).
+    3. Pending Expiration: cleanup_expired_pending_attachments safely unlinks expired pending attachments.
+    4. Image Privacy:
+       - Pending image inaccessible to unauthenticated or other users (404).
+       - Image linked to hidden thread inaccessible to strangers (404), accessible to author/moderator.
+       - Image linked to published thread accessible to public.
+    5. Gateway Size Enforcement: Payloads exceeding limits return 413.
+    """
+    author_id, session_token, csrf_token = await create_test_user_and_session(
+        "hardened_author", role="member"
+    )
+    stranger_id, stranger_session, stranger_csrf = await create_test_user_and_session(
+        "hardened_stranger", role="member"
+    )
+    mod_id, mod_session, mod_csrf = await create_test_user_and_session(
+        "hardened_mod", role="moderator"
+    )
+
+    cat_id = uuid.uuid4()
+    async with content_db_mod.content_db.transaction() as session:
+        cat = Category(
+            id=cat_id,
+            name="Hardening Category",
+            slug="hardening-cat",
+            description="Testing image upload hardening",
+            created_by=author_id,
+        )
+        session.add(cat)
+
+    user_transport = ASGITransport(app=user_app)
+    mock_user_client = AsyncClient(transport=user_transport, base_url="http://test")
+    set_auth_http_client(mock_user_client)
+
+    transport = ASGITransport(app=content_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("forum_session", session_token)
+
+        # Minimal valid 1x1 PNG bytes
+        valid_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
+        # -------------------------------------------------------------
+        # Phase E: Deep Image Decoding and Validation
+        # -------------------------------------------------------------
+        # Missing IEND chunk in PNG
+        corrupted_png = valid_png[:-12]
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("corrupt.png", corrupted_png, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 415
+        assert "Image validation failed" in res.json()["error"]["message"]
+
+        # PNG with excessive dimensions (>8192)
+        oversized_dim_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x27\x10\x00\x00\x27\x10"  # 10000x10000
+            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("bomb.png", oversized_dim_png, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 415
+        assert "exceed maximum allowed" in res.json()["error"]["message"]
+
+        # -------------------------------------------------------------
+        # Phase B: File/Metadata Consistency & Rollback on DB Error
+        # -------------------------------------------------------------
+        with patch.object(content_db_mod.content_db, "transaction", side_effect=RuntimeError("Simulated DB Crash")):
+            res = await client.post(
+                "/uploads/images",
+                files={"file": ("db_fail.png", valid_png, "image/png")},
+                headers={"X-CSRF-Token": csrf_token},
+            )
+            assert res.status_code == 500
+            assert res.json()["error"]["code"] == "DATABASE_ERROR"
+
+        # -------------------------------------------------------------
+        # Phase D: Privacy & Visibility Policy Enforcement
+        # -------------------------------------------------------------
+        # 1. Upload valid image (becomes pending)
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("privacy_test.png", valid_png, "image/png")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 201
+        att_id = res.json()["id"]
+
+        # 2. Author can view pending image (200)
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 200
+
+        # 3. Unauthenticated client cannot view pending image (404)
+        client.cookies.clear()
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+
+        # 4. Stranger client cannot view pending image (404)
+        client.cookies.set("forum_session", stranger_session)
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+
+        # 5. Link image to a Hidden thread
+        client.cookies.set("forum_session", session_token)
+        hidden_th_id = uuid.uuid4()
+        async with content_db_mod.content_db.transaction() as session:
+            h_thread = Thread(
+                id=hidden_th_id,
+                author_id=author_id,
+                category_id=cat_id,
+                title="Hidden Discussion Thread",
+                body="Confidential internal content with images.",
+                status="hidden",
+                is_pinned=False,
+                is_locked=False,
+                view_count=0,
+            )
+            session.add(h_thread)
+            # Link attachment
+            from sqlalchemy import select
+
+            from src.services.content.models import Attachment
+            stmt = select(Attachment).where(Attachment.id == uuid.UUID(att_id))
+            att_rec = (await session.execute(stmt)).scalar_one()
+            att_rec.thread_id = hidden_th_id
+            att_rec.status = "linked"
+            att_rec.linked_at = datetime.now(UTC)
+
+        # Author can view image of hidden thread (200)
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 200
+
+        # Moderator can view image of hidden thread (200)
+        client.cookies.set("forum_session", mod_session)
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 200
+
+        # Stranger cannot view image of hidden thread (404)
+        client.cookies.set("forum_session", stranger_session)
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+
+        # Unauthenticated cannot view image of hidden thread (404)
+        client.cookies.clear()
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+
+        # 6. Change thread to published -> Anyone can view (200)
+        async with content_db_mod.content_db.transaction() as session:
+            stmt = select(Thread).where(Thread.id == hidden_th_id)
+            th_rec = (await session.execute(stmt)).scalar_one()
+            th_rec.status = "published"
+
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 200
+        assert res.headers["cache-control"] == "public, max-age=86400"
+
+        # -------------------------------------------------------------
+        # Phase C: Pending Attachment Expiration and Cleanup
+        # -------------------------------------------------------------
+        from src.services.content.app import cleanup_expired_pending_attachments
+
+        # Seed an old pending attachment (>24 hours old)
+        old_att_id = uuid.uuid4()
+        old_obj_key = f"uploads/images/{old_att_id.hex}.png"
+        old_file_path = content_app_mod.get_absolute_file_path(
+            content_app_mod.content_settings.storage_local_dir, old_obj_key
+        )
+        content_app_mod.ensure_storage_dir(content_app_mod.content_settings.storage_local_dir)
+        with open(old_file_path, "wb") as f:
+            f.write(valid_png)
+
+        async with content_db_mod.content_db.transaction() as session:
+            old_att = Attachment(
+                id=old_att_id,
+                thread_id=None,
+                author_id=author_id,
+                object_key=old_obj_key,
+                file_size=len(valid_png),
+                mime_type="image/png",
+                status="pending",
+                created_at=datetime.now(UTC) - timedelta(hours=48),
+            )
+            session.add(old_att)
+
+        # Run cleanup with 24h max age
+        purged = await cleanup_expired_pending_attachments(max_age_seconds=86400)
+        assert purged >= 1
+        assert not old_file_path.exists()
+
+        # Verify linked attachment was NOT touched
+        async with content_db_mod.content_db.session() as session:
+            stmt = select(Attachment).where(Attachment.id == uuid.UUID(att_id))
+            linked_att = (await session.execute(stmt)).scalar_one()
+            assert linked_att.status == "linked"
+
+

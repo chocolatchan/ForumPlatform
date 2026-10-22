@@ -1,11 +1,14 @@
 """Content Service FastAPI application implementing core discussion and content workflows."""
 
+import asyncio
 import base64
+import contextlib
+import logging
 import re
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, File, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,6 +25,7 @@ from src.common.outbox_worker import OutboxWorker
 from src.services.content.auth import (
     ContentUser,
     get_current_user,
+    get_optional_current_user,
     require_role,
     verify_csrf_header,
     verify_internal_service_key,
@@ -55,6 +59,7 @@ from src.services.content.storage import (
     generate_object_key,
     get_absolute_file_path,
     sniff_image_type,
+    validate_image_content,
 )
 
 configure_logging(content_settings.service_name, content_settings.log_level)
@@ -73,7 +78,13 @@ outbox_worker = OutboxWorker(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await outbox_worker.start()
+    cleanup_task = asyncio.create_task(
+        _pending_attachment_cleanup_loop(), name="pending-attachment-cleanup"
+    )
     yield
+    cleanup_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cleanup_task
     await outbox_worker.stop()
     await content_db.close()
 
@@ -1034,8 +1045,70 @@ async def delete_comment(
 
 
 # =============================================================================
-# Uploads
+# Uploads & Attachments
 # =============================================================================
+logger = logging.getLogger("content_service")
+
+
+async def cleanup_expired_pending_attachments(
+    max_age_seconds: int = 86400, batch_size: int = 100
+) -> int:
+    """Bounded, safe cleanup of expired unlinked pending attachments."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+    cleaned_count = 0
+
+    async with content_db.transaction() as session:
+        # Select expired pending attachments that were never linked to any thread
+        stmt = (
+            select(Attachment)
+            .where(
+                Attachment.status == "pending",
+                Attachment.thread_id.is_(None),
+                Attachment.created_at < cutoff,
+            )
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        expired_attachments = (await session.execute(stmt)).scalars().all()
+
+        for att in expired_attachments:
+            # Mark status as deleted
+            att.status = "deleted"
+            cleaned_count += 1
+            # Safely unlink file from storage
+            file_path = get_absolute_file_path(
+                content_settings.storage_local_dir, att.object_key
+            )
+            try:
+                if file_path.exists() and file_path.is_file():
+                    file_path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to unlink expired attachment file %s: %s",
+                    att.object_key,
+                    exc,
+                )
+
+    return cleaned_count
+
+
+async def _pending_attachment_cleanup_loop() -> None:
+    """Background polling loop for pending attachment cleanup."""
+    while True:
+        try:
+            await asyncio.sleep(content_settings.attachment_cleanup_interval_seconds)
+            cleaned = await cleanup_expired_pending_attachments(
+                max_age_seconds=content_settings.attachment_pending_ttl_seconds,
+                batch_size=content_settings.attachment_cleanup_batch_size,
+            )
+            if cleaned > 0:
+                logger.info("Purged %d expired pending attachments", cleaned)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("Error in pending attachment cleanup loop: %s", exc)
+
+
 @app.post(
     "/uploads/images",
     tags=["Uploads"],
@@ -1087,6 +1160,18 @@ async def upload_image(
             )
         chunks.append(chunk)
 
+    full_payload = b"".join(chunks)
+
+    # Phase E: Deep image content & dimension validation
+    is_valid, mime_or_err, width, height = validate_image_content(full_payload)
+    if not is_valid:
+        return error_response(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            code="UNSUPPORTED_MEDIA_TYPE",
+            message=f"Image validation failed: {mime_or_err}",
+            request=request,
+        )
+
     attachment_id = uuid.uuid4()
     object_key = generate_object_key(attachment_id, sniffed_mime)
 
@@ -1095,21 +1180,43 @@ async def upload_image(
     target_path = get_absolute_file_path(content_settings.storage_local_dir, object_key)
 
     with open(target_path, "wb") as f:
-        for chunk in chunks:
-            f.write(chunk)
+        f.write(full_payload)
 
-    # Persist metadata to database
-    async with content_db.transaction() as session:
-        attachment = Attachment(
-            id=attachment_id,
-            thread_id=None,
-            author_id=current_user.id,
-            object_key=object_key,
-            file_size=total_size,
-            mime_type=sniffed_mime,
-            status="pending",
+    # Phase B: File/metadata consistency with safe cleanup on DB failure
+    try:
+        async with content_db.transaction() as session:
+            attachment = Attachment(
+                id=attachment_id,
+                thread_id=None,
+                author_id=current_user.id,
+                object_key=object_key,
+                file_size=total_size,
+                mime_type=sniffed_mime,
+                status="pending",
+            )
+            session.add(attachment)
+    except Exception as db_exc:
+        # Attempt safe cleanup of the newly created file to prevent orphan
+        with contextlib.suppress(FileNotFoundError):
+            try:
+                target_path.unlink(missing_ok=True)
+            except OSError as unlink_exc:
+                logger.error(
+                    "Failed to delete orphaned file %s after DB error: %s",
+                    object_key,
+                    unlink_exc,
+                )
+        logger.error(
+            "Attachment metadata persistence failed for %s: %s",
+            object_key,
+            db_exc,
         )
-        session.add(attachment)
+        return error_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="DATABASE_ERROR",
+            message="Failed to persist attachment metadata. File upload rolled back.",
+            request=request,
+        )
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
@@ -1125,12 +1232,63 @@ async def upload_image(
 
 
 @app.get("/uploads/images/{image_id}", tags=["Uploads"])
-async def serve_image(image_id: uuid.UUID, request: Request) -> Response:
-    """Serve image attachment directly."""
+async def serve_image(
+    image_id: uuid.UUID,
+    request: Request,
+    current_user: ContentUser | None = Depends(get_optional_current_user),
+) -> Response:
+    """Serve image attachment with strict visibility and privacy enforcement."""
     async with content_db.session() as session:
-        stmt = select(Attachment).where(Attachment.id == image_id)
+        stmt = (
+            select(Attachment)
+            .options(selectinload(Attachment.thread))
+            .where(Attachment.id == image_id)
+        )
         attachment = (await session.execute(stmt)).scalar_one_or_none()
         if not attachment or attachment.status == "deleted":
+            return error_response(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="ATTACHMENT_NOT_FOUND",
+                message=f"Attachment with ID '{image_id}' not found.",
+                request=request,
+            )
+
+        # Phase D: Privacy & Visibility Policy Enforcement
+        if attachment.status == "pending":
+            # Pending attachments are strictly private to their author
+            if not current_user or current_user.id != attachment.author_id:
+                return error_response(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    code="ATTACHMENT_NOT_FOUND",
+                    message=f"Attachment with ID '{image_id}' not found.",
+                    request=request,
+                )
+        elif attachment.status == "linked":
+            # If parent thread does not exist or is deleted -> 404
+            thread = attachment.thread
+            if not thread or thread.status == "deleted":
+                return error_response(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    code="ATTACHMENT_NOT_FOUND",
+                    message=f"Attachment with ID '{image_id}' not found.",
+                    request=request,
+                )
+
+            # If parent thread is hidden -> only author or moderator/admin may view
+            if thread.status == "hidden":
+                has_access = current_user and (
+                    current_user.role in ("moderator", "admin")
+                    or current_user.id == thread.author_id
+                )
+                if not has_access:
+                    return error_response(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        code="ATTACHMENT_NOT_FOUND",
+                        message=f"Attachment with ID '{image_id}' not found.",
+                        request=request,
+                    )
+        else:
+            # Any other state (orphaned, etc.) is not served
             return error_response(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="ATTACHMENT_NOT_FOUND",
@@ -1154,9 +1312,10 @@ async def serve_image(image_id: uuid.UUID, request: Request) -> Response:
             media_type=attachment.mime_type,
             headers={
                 "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": "public, max-age=86400" if attachment.status == "linked" else "no-store, private",
             },
         )
+
 
 
 
