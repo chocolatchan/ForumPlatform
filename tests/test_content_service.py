@@ -43,6 +43,7 @@ Verifies:
 """
 
 import os
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -52,6 +53,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 import src.gateway.app as gateway_app_mod
 import src.services.content.app as content_app_mod
@@ -62,8 +64,8 @@ from src.common.database import DatabaseSessionManager
 from src.gateway.app import app as gateway_app
 from src.services.content.app import app as content_app
 from src.services.content.auth import set_auth_http_client
+from src.services.content.models import Attachment, Category, Thread
 from src.services.content.models import Base as ContentBase
-from src.services.content.models import Category, Thread
 from src.services.user.app import app as user_app
 from src.services.user.models import Account
 from src.services.user.models import Base as UserBase
@@ -650,11 +652,10 @@ async def test_image_upload_lifecycle_and_validation():
 
     transport = ASGITransport(app=content_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Minimal valid PNG bytes
+        # Minimal valid PNG bytes (RGB 1x1 clean PNG)
         png_bytes = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+            b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
         )
 
         # 1. Unauthenticated upload -> 401
@@ -707,12 +708,12 @@ async def test_image_upload_lifecycle_and_validation():
         assert att_data["mime_type"] == "image/png"
         att_id = att_data["id"]
 
-        # 6. Fetch uploaded image directly -> 200 OK
+        # 6. Fetch uploaded image directly -> 200 OK (verified normalized PNG served)
         res_img = await client.get(f"/uploads/images/{att_id}")
         assert res_img.status_code == 200
         assert res_img.headers["content-type"] == "image/png"
         assert res_img.headers["x-content-type-options"] == "nosniff"
-        assert res_img.content == png_bytes
+        assert res_img.content.startswith(b"\x89PNG\r\n\x1a\n")
 
         # 7. Create thread linking this attachment -> 201 Created
         res_thread = await client.post(
@@ -788,9 +789,8 @@ async def test_image_upload_hardening_suite():
 
         # Minimal valid 1x1 PNG bytes
         valid_png = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+            b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
         )
 
         # -------------------------------------------------------------
@@ -807,18 +807,23 @@ async def test_image_upload_hardening_suite():
         assert "Image validation failed" in res.json()["error"]["message"]
 
         # PNG with excessive dimensions (>8192)
-        oversized_dim_png = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x27\x10\x00\x00\x27\x10"  # 10000x10000
-            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-            b"\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
+        import io
+
+        from PIL import Image
+
+        oversized_img = Image.new("RGB", (10000, 10000), (255, 0, 0))
+        oversized_buf = io.BytesIO()
+        oversized_img.save(oversized_buf, format="PNG")
+        oversized_dim_png = oversized_buf.getvalue()
+
         res = await client.post(
             "/uploads/images",
             files={"file": ("bomb.png", oversized_dim_png, "image/png")},
             headers={"X-CSRF-Token": csrf_token},
         )
         assert res.status_code == 415
-        assert "exceed maximum allowed" in res.json()["error"]["message"]
+        err_msg = res.json()["error"]["message"]
+        assert any(k in err_msg for k in ("exceed", "Decompression bomb", "limit"))
 
         # -------------------------------------------------------------
         # Phase B: File/Metadata Consistency & Rollback on DB Error
@@ -884,9 +889,11 @@ async def test_image_upload_hardening_suite():
             att_rec.status = "linked"
             att_rec.linked_at = datetime.now(UTC)
 
-        # Author can view image of hidden thread (200)
+        # Author can view image of hidden thread (200), and it must not be
+        # publicly cacheable.
         res = await client.get(f"/uploads/images/{att_id}")
         assert res.status_code == 200
+        assert res.headers["cache-control"] == "no-store, private"
 
         # Moderator can view image of hidden thread (200)
         client.cookies.set("forum_session", mod_session)
@@ -912,6 +919,30 @@ async def test_image_upload_hardening_suite():
         res = await client.get(f"/uploads/images/{att_id}")
         assert res.status_code == 200
         assert res.headers["cache-control"] == "public, max-age=86400"
+
+        # 7. Deleted thread -> uniform 404 even for a previously public image.
+        async with content_db_mod.content_db.transaction() as session:
+            th_rec = (
+                await session.execute(select(Thread).where(Thread.id == hidden_th_id))
+            ).scalar_one()
+            th_rec.status = "deleted"
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+
+        # 8. Deleted attachment -> 404.
+        async with content_db_mod.content_db.transaction() as session:
+            att_rec = (
+                await session.execute(select(Attachment).where(Attachment.id == uuid.UUID(att_id)))
+            ).scalar_one()
+            att_rec.status = "deleted"
+        res = await client.get(f"/uploads/images/{att_id}")
+        assert res.status_code == 404
+        # Restore linked state for the subsequent cleanup-worker assertion.
+        async with content_db_mod.content_db.transaction() as session:
+            att_rec = (
+                await session.execute(select(Attachment).where(Attachment.id == uuid.UUID(att_id)))
+            ).scalar_one()
+            att_rec.status = "linked"
 
         # -------------------------------------------------------------
         # Phase C: Pending Attachment Expiration and Cleanup
@@ -952,4 +983,368 @@ async def test_image_upload_hardening_suite():
             linked_att = (await session.execute(stmt)).scalar_one()
             assert linked_att.status == "linked"
 
+        # -------------------------------------------------------------
+        # Workstream 1: Storage Reconciliation Tests
+        # -------------------------------------------------------------
+        import time
 
+        from src.services.content.app import reconcile_orphaned_storage_files
+
+        # 1. Seed an unrecorded orphan file (>24h old) on disk with valid server naming pattern
+        orphan_att_id = uuid.uuid4()
+        orphan_obj_key = f"uploads/images/{orphan_att_id.hex}.png"
+        orphan_path = content_app_mod.get_absolute_file_path(
+            content_app_mod.content_settings.storage_local_dir, orphan_obj_key
+        )
+        with open(orphan_path, "wb") as f:
+            f.write(valid_png)
+        # Set mtime to 48 hours ago
+        past_time = time.time() - (48 * 3600)
+        os.utime(orphan_path, (past_time, past_time))
+
+        # 2. Seed a newly created unrecorded file (<1h old)
+        new_orphan_id = uuid.uuid4()
+        new_orphan_key = f"uploads/images/{new_orphan_id.hex}.png"
+        new_orphan_path = content_app_mod.get_absolute_file_path(
+            content_app_mod.content_settings.storage_local_dir, new_orphan_key
+        )
+        with open(new_orphan_path, "wb") as f:
+            f.write(valid_png)
+
+        # 3. Seed an unexpected file / non-conforming name
+        from pathlib import Path
+        invalid_name_path = (
+            Path(content_app_mod.content_settings.storage_local_dir) / "images" / "malicious.sh"
+        )
+        with open(invalid_name_path, "wb") as f:
+            f.write(b"#!/bin/bash\necho bad")
+        os.utime(invalid_name_path, (past_time, past_time))
+
+        # Run reconciliation with safety_age_seconds = 86400 (24h)
+        reconciled_count = await reconcile_orphaned_storage_files(safety_age_seconds=86400)
+        assert reconciled_count >= 1
+        # Old orphan is removed
+        assert not orphan_path.exists()
+        # Fresh file is preserved (within grace period)
+        assert new_orphan_path.exists()
+        # Non-conforming filename ignored
+        assert invalid_name_path.exists()
+
+        # Clean up temporary test files
+        new_orphan_path.unlink(missing_ok=True)
+        invalid_name_path.unlink(missing_ok=True)
+
+
+
+
+
+# =============================================================================
+# Task 027-H1-R2: lifecycle consistency and reconciliation regressions
+# =============================================================================
+
+
+def _write_png(path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def _age_file(path, seconds: int = 48 * 3600) -> None:
+    past = time.time() - seconds
+    os.utime(path, (past, past))
+
+
+@pytest.mark.asyncio
+async def test_client_extension_and_mime_are_not_trusted():
+    """A PNG named .jpg with image/jpeg must be stored as image/png."""
+    _, session_token, csrf_token = await create_test_user_and_session("mime_author")
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00"
+        b"\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    transport = ASGITransport(app=content_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("forum_session", session_token)
+        res = await client.post(
+            "/uploads/images",
+            files={"file": ("lies.jpg", png_bytes, "image/jpeg")},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 201
+        assert res.json()["mime_type"] == "image/png"
+        assert res.json()["object_key"].endswith(".png")
+
+
+@pytest.mark.asyncio
+async def test_invalid_attachment_does_not_commit_partial_thread():
+    """Returning INVALID_ATTACHMENT must not leave a flushed thread behind."""
+    author_id, session_token, csrf_token = await create_test_user_and_session("rollback_author")
+    cat_id = uuid.uuid4()
+    async with content_db_mod.content_db.transaction() as session:
+        session.add(
+            Category(
+                id=cat_id,
+                name="Rollback Category",
+                slug=f"rollback-{cat_id.hex[:8]}",
+                created_by=author_id,
+            )
+        )
+
+    title = "Thread must not survive invalid attachment"
+    transport = ASGITransport(app=content_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("forum_session", session_token)
+        res = await client.post(
+            "/threads",
+            json={
+                "category_id": str(cat_id),
+                "title": title,
+                "body": "This body is long enough to satisfy the check constraint.",
+                "image_ids": [str(uuid.uuid4())],
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert res.status_code == 400
+        assert res.json()["error"]["code"] == "INVALID_ATTACHMENT"
+
+    async with content_db_mod.content_db.session() as session:
+        count = (
+            await session.execute(select(func.count(Thread.id)).where(Thread.title == title))
+        ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_db_failure_unlink_failure_is_recovered_by_reconciliation(monkeypatch, tmp_path):
+    """A failed immediate unlink leaves a discoverable orphan file."""
+    _, session_token, csrf_token = await create_test_user_and_session("unlink_recovery_author")
+    monkeypatch.setattr(content_app_mod.content_settings, "storage_local_dir", str(tmp_path))
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00"
+        b"\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    images_dir = tmp_path / "images"
+    before = set(images_dir.glob("*")) if images_dir.exists() else set()
+
+    transport = ASGITransport(app=content_app)
+    with (
+        patch.object(
+            content_db_mod.content_db, "transaction", side_effect=RuntimeError("db down")
+        ),
+        patch.object(content_app_mod, "_remove_stored_file", return_value=False),
+    ):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            client.cookies.set("forum_session", session_token)
+            res = await client.post(
+                "/uploads/images",
+                files={"file": ("orphan.png", png_bytes, "image/png")},
+                headers={"X-CSRF-Token": csrf_token},
+            )
+            assert res.status_code == 500
+            assert res.json()["error"]["code"] == "DATABASE_ERROR"
+
+    after = set(images_dir.glob("*"))
+    created = after - before
+    assert len(created) == 1
+    orphan_path = created.pop()
+    _age_file(orphan_path)
+    rel_key = f"uploads/images/{orphan_path.name}"
+
+    async with content_db_mod.content_db.session() as session:
+        row = (
+            await session.execute(
+                select(Attachment).where(Attachment.object_key == rel_key)
+            )
+        ).scalar_one_or_none()
+    assert row is None
+    assert orphan_path.exists()
+
+    removed = await content_app_mod.reconcile_orphaned_storage_files(safety_age_seconds=86400)
+    assert removed >= 1
+    assert not orphan_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unlink_failure_is_recovered_by_reconciliation(monkeypatch, tmp_path):
+    """Committed 'deleted' metadata plus a remaining file is reconciled later."""
+    author_id, _, _ = await create_test_user_and_session("cleanup_recovery_author")
+    monkeypatch.setattr(content_app_mod.content_settings, "storage_local_dir", str(tmp_path))
+    images_dir = tmp_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    att_id = uuid.uuid4()
+    rel_key = f"uploads/images/{att_id.hex}.png"
+    file_path = images_dir / f"{att_id.hex}.png"
+    _write_png(file_path, b"\x89PNG\r\n\x1a\n" + b"payload")
+    _age_file(file_path)
+
+    async with content_db_mod.content_db.transaction() as session:
+        session.add(
+            Attachment(
+                id=att_id,
+                thread_id=None,
+                author_id=author_id,
+                object_key=rel_key,
+                file_size=16,
+                mime_type="image/png",
+                status="pending",
+                created_at=datetime.now(UTC) - timedelta(hours=48),
+            )
+        )
+
+    with patch.object(content_app_mod, "_remove_stored_file", return_value=False):
+        cleaned = await content_app_mod.cleanup_expired_pending_attachments(
+            max_age_seconds=86400
+        )
+    assert cleaned >= 1
+    assert file_path.exists()
+
+    async with content_db_mod.content_db.session() as session:
+        status = (
+            await session.execute(select(Attachment.status).where(Attachment.id == att_id))
+        ).scalar_one()
+    assert status == "deleted"
+
+    removed = await content_app_mod.reconcile_orphaned_storage_files(safety_age_seconds=86400)
+    assert removed >= 1
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rollback_preserves_pending_metadata_and_file(monkeypatch, tmp_path):
+    """File deletion must happen only after the cleanup transaction commits."""
+    author_id, _, _ = await create_test_user_and_session("cleanup_rollback_author")
+    monkeypatch.setattr(content_app_mod.content_settings, "storage_local_dir", str(tmp_path))
+    images_dir = tmp_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    att_id = uuid.uuid4()
+    rel_key = f"uploads/images/{att_id.hex}.png"
+    file_path = images_dir / f"{att_id.hex}.png"
+    _write_png(file_path, b"\x89PNG\r\n\x1a\n" + b"payload")
+
+    async with content_db_mod.content_db.transaction() as session:
+        session.add(
+            Attachment(
+                id=att_id,
+                thread_id=None,
+                author_id=author_id,
+                object_key=rel_key,
+                file_size=16,
+                mime_type="image/png",
+                status="pending",
+                created_at=datetime.now(UTC) - timedelta(hours=48),
+            )
+        )
+
+    from contextlib import asynccontextmanager
+
+    real_transaction = content_db_mod.content_db.transaction
+
+    @asynccontextmanager
+    async def failing_commit():
+        async with real_transaction() as session:
+            yield session
+            raise RuntimeError("simulated commit failure")
+
+    with (
+        patch.object(content_db_mod.content_db, "transaction", failing_commit),
+        pytest.raises(RuntimeError),
+    ):
+        await content_app_mod.cleanup_expired_pending_attachments(max_age_seconds=86400)
+
+    assert file_path.exists()
+    async with content_db_mod.content_db.session() as session:
+        status = (
+            await session.execute(select(Attachment.status).where(Attachment.id == att_id))
+        ).scalar_one()
+    assert status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_safety_bounds_and_retry(monkeypatch, tmp_path):
+    """Reconciliation ignores recent/unknown/symlink/live files, aborts on DB errors,
+    retries unlink failures, and processes bounded batches idempotently."""
+    from pathlib import Path as PathType
+
+    author_id, _, _ = await create_test_user_and_session("reconcile_author")
+    monkeypatch.setattr(content_app_mod.content_settings, "storage_local_dir", str(tmp_path))
+    images_dir = tmp_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    orphans = []
+    for _ in range(5):
+        oid = uuid.uuid4()
+        path = images_dir / f"{oid.hex}.png"
+        _write_png(path, b"\x89PNG\r\n\x1a\n" + b"orphan")
+        _age_file(path)
+        orphans.append(path)
+
+    recent = images_dir / f"{uuid.uuid4().hex}.png"
+    _write_png(recent, b"\x89PNG\r\n\x1a\n" + b"recent")
+
+    unexpected = images_dir / "not-an-object-key.sh"
+    _write_png(unexpected, b"#!/bin/sh\n")
+    _age_file(unexpected)
+
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"do not delete")
+    symlink = images_dir / f"{uuid.uuid4().hex}.png"
+    symlink.symlink_to(outside)
+    _age_file(symlink)
+
+    live_id = uuid.uuid4()
+    live_key = f"uploads/images/{live_id.hex}.png"
+    live_path = images_dir / f"{live_id.hex}.png"
+    _write_png(live_path, b"\x89PNG\r\n\x1a\n" + b"live")
+    _age_file(live_path)
+    async with content_db_mod.content_db.transaction() as session:
+        session.add(
+            Attachment(
+                id=live_id,
+                thread_id=None,
+                author_id=author_id,
+                object_key=live_key,
+                file_size=16,
+                mime_type="image/png",
+                status="linked",
+            )
+        )
+
+    # Database unavailable -> no deletions at all.
+    with patch.object(content_db_mod.content_db, "session", side_effect=RuntimeError("down")):
+        assert await content_app_mod.reconcile_orphaned_storage_files(safety_age_seconds=86400) == 0
+    assert all(p.exists() for p in orphans)
+
+    # Unlink failure -> candidates survive and are retried.
+    with patch.object(PathType, "unlink", side_effect=OSError("denied")):
+        assert await content_app_mod.reconcile_orphaned_storage_files(safety_age_seconds=86400) == 0
+    assert all(p.exists() for p in orphans)
+
+    # Bounded processing: at most two candidates per iteration, then idempotent
+    # completion. A batch may include a live-metadata file which is preserved.
+    first = await content_app_mod.reconcile_orphaned_storage_files(
+        safety_age_seconds=86400, batch_size=2
+    )
+    assert 0 < first <= 2
+    for _ in range(10):
+        if not any(p.exists() for p in orphans):
+            break
+        await content_app_mod.reconcile_orphaned_storage_files(
+            safety_age_seconds=86400, batch_size=2
+        )
+    assert not any(p.exists() for p in orphans)
+    assert await content_app_mod.reconcile_orphaned_storage_files(
+        safety_age_seconds=86400, batch_size=2
+    ) == 0
+
+    assert recent.exists()
+    assert unexpected.exists()
+    assert symlink.is_symlink()
+    assert outside.exists()
+    assert live_path.exists()
+
+    symlink.unlink()
+    outside.unlink()

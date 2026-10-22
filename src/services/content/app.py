@@ -4,11 +4,14 @@ import asyncio
 import base64
 import contextlib
 import logging
+import os
 import re
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -55,11 +58,12 @@ from src.services.content.schemas import (
 )
 from src.services.content.storage import (
     MAX_FILE_SIZE_BYTES,
+    SAFE_OBJECT_KEY_PATTERN,
     ensure_storage_dir,
     generate_object_key,
     get_absolute_file_path,
     sniff_image_type,
-    validate_image_content,
+    validate_and_normalize_image,
 )
 
 configure_logging(content_settings.service_name, content_settings.log_level)
@@ -324,7 +328,7 @@ async def list_threads(
     request: Request,
     category_id: uuid.UUID | None = None,
     tag: str | None = None,
-    sort: str = Query(default="newest", enum=["newest", "most_viewed", "most_voted"]),
+    sort: Literal["newest", "most_viewed", "most_voted"] = Query(default="newest"),
     limit: int = Query(default=20, ge=1, le=50),
     cursor: str | None = None,
 ) -> JSONResponse:
@@ -399,6 +403,34 @@ async def create_thread(
                 request=request,
             )
 
+        # Lock eligible attachment rows BEFORE creating the thread. This both
+        # enforces a single lock order (Attachment.id) across concurrent
+        # requests and ensures an invalid attachment cannot leave behind a
+        # half-created thread when the handler returns an error response.
+        linked_attachment_ids: list[uuid.UUID] = []
+        locked_attachments: list[Attachment] = []
+        if req.image_ids:
+            # Deterministically sort IDs to prevent deadlocks across concurrent requests
+            sorted_image_ids = sorted(req.image_ids)
+            att_stmt = (
+                select(Attachment)
+                .where(
+                    Attachment.id.in_(sorted_image_ids),
+                    Attachment.author_id == current_user.id,
+                    Attachment.status == "pending",
+                )
+                .order_by(Attachment.id)
+                .with_for_update()
+            )
+            locked_attachments = list((await session.execute(att_stmt)).scalars().all())
+            if len(locked_attachments) != len(sorted_image_ids):
+                return error_response(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code="INVALID_ATTACHMENT",
+                    message="One or more attachments are invalid, do not belong to you, or have already been linked.",
+                    request=request,
+                )
+
         new_thread = Thread(
             id=uuid.uuid4(),
             author_id=current_user.id,
@@ -432,28 +464,12 @@ async def create_thread(
 
         await session.flush()
 
-        # Validate and associate attachments if provided
-        linked_attachment_ids: list[uuid.UUID] = []
-        if req.image_ids:
-            # Query attachments belonging to author and in pending state
-            att_stmt = select(Attachment).where(
-                Attachment.id.in_(req.image_ids),
-                Attachment.author_id == current_user.id,
-                Attachment.status == "pending",
-            )
-            attachments = (await session.execute(att_stmt)).scalars().all()
-            if len(attachments) != len(req.image_ids):
-                return error_response(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    code="INVALID_ATTACHMENT",
-                    message="One or more attachments are invalid, do not belong to you, or have already been linked.",
-                    request=request,
-                )
-            for att in attachments:
-                att.thread_id = new_thread.id
-                att.status = "linked"
-                att.linked_at = datetime.now(UTC)
-                linked_attachment_ids.append(att.id)
+        # Associate the already-locked attachments with the new thread.
+        for att in locked_attachments:
+            att.thread_id = new_thread.id
+            att.status = "linked"
+            att.linked_at = datetime.now(UTC)
+            linked_attachment_ids.append(att.id)
 
         # Outbox event
         outbox = ContentOutboxEvent(
@@ -1050,15 +1066,44 @@ async def delete_comment(
 logger = logging.getLogger("content_service")
 
 
+def _remove_stored_file(object_key: str) -> bool:
+    """Best-effort removal of a single stored object.
+
+    Returns True when the file is gone (including already absent). A failed
+    unlink is logged and left for filesystem reconciliation; callers must not
+    pretend the removal succeeded.
+    """
+    try:
+        file_path = get_absolute_file_path(content_settings.storage_local_dir, object_key)
+        file_path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        logger.warning(
+            "Failed to remove stored object %s (%s)", object_key, type(exc).__name__
+        )
+        return False
+
+
 async def cleanup_expired_pending_attachments(
     max_age_seconds: int = 86400, batch_size: int = 100
 ) -> int:
-    """Bounded, safe cleanup of expired unlinked pending attachments."""
+    """Bounded cleanup of expired unlinked pending attachments.
+
+    State transition and physical deletion are deliberately split:
+
+    1. A short transaction locks eligible rows (consistent id order, SKIP
+       LOCKED so concurrent linking always wins cleanly) and commits them to
+       ``deleted``.
+    2. Only after that commit is the file unlinked. A crash or failure between
+       the two steps leaves a ``deleted`` row plus a file, which
+       :func:`reconcile_orphaned_storage_files` later removes. The reverse
+       order is never used: unlinking before commit would allow a rollback to
+       resurrect a ``pending`` row whose bytes are already gone.
+    """
     cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
-    cleaned_count = 0
+    deleted_object_keys: list[str] = []
 
     async with content_db.transaction() as session:
-        # Select expired pending attachments that were never linked to any thread
         stmt = (
             select(Attachment)
             .where(
@@ -1066,34 +1111,147 @@ async def cleanup_expired_pending_attachments(
                 Attachment.thread_id.is_(None),
                 Attachment.created_at < cutoff,
             )
+            .order_by(Attachment.id)
             .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
         expired_attachments = (await session.execute(stmt)).scalars().all()
-
         for att in expired_attachments:
-            # Mark status as deleted
             att.status = "deleted"
-            cleaned_count += 1
-            # Safely unlink file from storage
-            file_path = get_absolute_file_path(
-                content_settings.storage_local_dir, att.object_key
-            )
-            try:
-                if file_path.exists() and file_path.is_file():
-                    file_path.unlink()
-            except OSError as exc:
-                logger.warning(
-                    "Failed to unlink expired attachment file %s: %s",
-                    att.object_key,
-                    exc,
-                )
+            deleted_object_keys.append(att.object_key)
 
-    return cleaned_count
+    # Transaction has committed: these rows can no longer roll back to a state
+    # in which the files are required.
+    for object_key in deleted_object_keys:
+        _remove_stored_file(object_key)
+
+    return len(deleted_object_keys)
+
+
+async def reconcile_orphaned_storage_files(
+    safety_age_seconds: int = 86400, batch_size: int = 100
+) -> int:
+    """Scan the configured upload root for physical files with no live metadata.
+
+    A file is eligible when it is old enough (mtime grace period), has a
+    server-generated object-key name, and its metadata is either absent or
+    already terminal (``deleted``). This is the recovery path for:
+
+    - a process crash between writing a file and inserting metadata;
+    - a failed immediate unlink after a database error;
+    - a failed unlink after the cleanup transaction committed ``deleted``.
+
+    Safety properties:
+    - only the configured ``images`` directory is scanned;
+    - symlinks are ignored and never followed;
+    - filenames must match ``SAFE_OBJECT_KEY_PATTERN``;
+    - metadata is queried in one batch, then rechecked per file immediately
+      before unlink;
+    - any database error aborts the scan without deleting anything;
+    - processing is bounded by ``batch_size`` and repeated runs are idempotent.
+    """
+    base_dir = Path(content_settings.storage_local_dir) / "images"
+    if not base_dir.exists() or not base_dir.is_dir():
+        return 0
+
+    now_ts = datetime.now(UTC).timestamp()
+    candidates: list[tuple[Path, str]] = []
+
+    try:
+        for entry in base_dir.iterdir():
+            if len(candidates) >= batch_size:
+                break
+
+            # Security: never follow symlinks, even inside the upload root.
+            if entry.is_symlink():
+                continue
+            if not entry.is_file():
+                continue
+
+            rel_key = f"uploads/images/{entry.name}"
+            if not SAFE_OBJECT_KEY_PATTERN.match(rel_key):
+                continue
+
+            try:
+                stat = entry.stat()
+                if now_ts - stat.st_mtime >= safety_age_seconds:
+                    candidates.append((entry, rel_key))
+            except OSError:
+                continue
+    except OSError as exc:
+        logger.error(
+            "Failed to list upload storage directory (%s)", type(exc).__name__
+        )
+        return 0
+
+    if not candidates:
+        return 0
+
+    candidate_keys = [c[1] for c in candidates]
+    try:
+        async with content_db.session() as session:
+            stmt = select(Attachment.object_key, Attachment.status).where(
+                Attachment.object_key.in_(candidate_keys)
+            )
+            metadata_state = {
+                row.object_key: row.status for row in (await session.execute(stmt)).all()
+            }
+    except Exception as exc:
+        # Safe abort: database unavailability must never cause mass deletion.
+        logger.error(
+            "Database query failed during reconciliation; aborting (%s)",
+            type(exc).__name__,
+        )
+        return 0
+
+    deleted_count = 0
+    for file_path, rel_key in candidates:
+        # Skip files that still have non-terminal metadata.
+        if metadata_state.get(rel_key, "deleted") != "deleted":
+            continue
+
+        # Recheck immediately before deletion to narrow the upload/link race.
+        try:
+            async with content_db.session() as recheck_session:
+                stmt_recheck = select(Attachment.status).where(
+                    Attachment.object_key == rel_key
+                )
+                current_status = (
+                    await recheck_session.execute(stmt_recheck)
+                ).scalar_one_or_none()
+        except Exception as exc:
+            logger.warning(
+                "Metadata recheck failed for %s; skipping (%s)",
+                rel_key,
+                type(exc).__name__,
+            )
+            continue
+
+        if current_status is not None and current_status != "deleted":
+            continue
+
+        try:
+            if file_path.is_symlink():
+                continue
+            if not file_path.is_file():
+                continue
+            file_path.unlink()
+            deleted_count += 1
+            logger.info("Reconciled orphaned storage object: %s", rel_key)
+        except OSError as exc:
+            logger.warning(
+                "Failed to unlink orphaned object %s (%s)",
+                rel_key,
+                type(exc).__name__,
+            )
+
+    return deleted_count
 
 
 async def _pending_attachment_cleanup_loop() -> None:
-    """Background polling loop for pending attachment cleanup."""
+    """Background polling loop for pending attachment cleanup and reconciliation."""
+    loop = asyncio.get_running_loop()
+    next_reconcile_at = 0.0
     while True:
         try:
             await asyncio.sleep(content_settings.attachment_cleanup_interval_seconds)
@@ -1103,10 +1261,24 @@ async def _pending_attachment_cleanup_loop() -> None:
             )
             if cleaned > 0:
                 logger.info("Purged %d expired pending attachments", cleaned)
+
+            now = loop.time()
+            if now >= next_reconcile_at:
+                reconciled = await reconcile_orphaned_storage_files(
+                    safety_age_seconds=content_settings.attachment_reconciliation_safety_age_seconds,
+                    batch_size=content_settings.attachment_reconciliation_batch_size,
+                )
+                next_reconcile_at = now + float(
+                    content_settings.attachment_reconciliation_interval_seconds
+                )
+                if reconciled > 0:
+                    logger.info("Reconciled %d orphaned storage files", reconciled)
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.error("Error in pending attachment cleanup loop: %s", exc)
+            logger.error(
+                "Error in pending attachment cleanup loop (%s)", type(exc).__name__
+            )
 
 
 @app.post(
@@ -1162,8 +1334,8 @@ async def upload_image(
 
     full_payload = b"".join(chunks)
 
-    # Phase E: Deep image content & dimension validation
-    is_valid, mime_or_err, width, height = validate_image_content(full_payload)
+    # Workstream 3: Deep image content, pixel decoding, and normalization
+    is_valid, mime_or_err, normalized_payload, width, height = validate_and_normalize_image(full_payload)
     if not is_valid:
         return error_response(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -1175,12 +1347,27 @@ async def upload_image(
     attachment_id = uuid.uuid4()
     object_key = generate_object_key(attachment_id, sniffed_mime)
 
-    # Write to local persistent storage
+    # Write to local persistent storage before inserting metadata. The file is
+    # fsynced so a committed database row never points at unflushed bytes.
     ensure_storage_dir(content_settings.storage_local_dir)
     target_path = get_absolute_file_path(content_settings.storage_local_dir, object_key)
 
-    with open(target_path, "wb") as f:
-        f.write(full_payload)
+    try:
+        with open(target_path, "wb") as f:
+            f.write(normalized_payload)
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as storage_exc:
+        _remove_stored_file(object_key)
+        logger.error(
+            "Failed to write attachment file %s (%s)", object_key, type(storage_exc).__name__
+        )
+        return error_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="STORAGE_ERROR",
+            message="Failed to store uploaded image.",
+            request=request,
+        )
 
     # Phase B: File/metadata consistency with safe cleanup on DB failure
     try:
@@ -1190,26 +1377,20 @@ async def upload_image(
                 thread_id=None,
                 author_id=current_user.id,
                 object_key=object_key,
-                file_size=total_size,
+                file_size=len(normalized_payload),
                 mime_type=sniffed_mime,
                 status="pending",
             )
             session.add(attachment)
     except Exception as db_exc:
-        # Attempt safe cleanup of the newly created file to prevent orphan
-        with contextlib.suppress(FileNotFoundError):
-            try:
-                target_path.unlink(missing_ok=True)
-            except OSError as unlink_exc:
-                logger.error(
-                    "Failed to delete orphaned file %s after DB error: %s",
-                    object_key,
-                    unlink_exc,
-                )
+        # The database transaction rolled back; the file is now unreferenced.
+        # If this unlink fails, reconciliation will find it after the grace
+        # period because no metadata row exists.
+        _remove_stored_file(object_key)
         logger.error(
-            "Attachment metadata persistence failed for %s: %s",
+            "Attachment metadata persistence failed for %s (%s)",
             object_key,
-            db_exc,
+            type(db_exc).__name__,
         )
         return error_response(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1307,12 +1488,19 @@ async def serve_image(
                 request=request,
             )
 
+        # Only published threads are public. Pending and hidden/deleted
+        # attachments must not be stored in shared caches.
+        is_public = (
+            attachment.status == "linked"
+            and attachment.thread is not None
+            and attachment.thread.status == "published"
+        )
         return FileResponse(
             path=str(file_path),
             media_type=attachment.mime_type,
             headers={
                 "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "public, max-age=86400" if attachment.status == "linked" else "no-store, private",
+                "Cache-Control": "public, max-age=86400" if is_public else "no-store, private",
             },
         )
 

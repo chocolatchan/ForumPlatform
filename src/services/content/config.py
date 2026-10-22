@@ -21,6 +21,9 @@ class ContentSettings(BaseServiceSettings):
     attachment_pending_ttl_seconds: int = 86400
     attachment_cleanup_interval_seconds: int = 3600
     attachment_cleanup_batch_size: int = 100
+    attachment_reconciliation_interval_seconds: int = 86400
+    attachment_reconciliation_safety_age_seconds: int = 86400
+    attachment_reconciliation_batch_size: int = 100
 
     # User Service / Auth integration
     user_service_url: str = Field(default="http://localhost:8001")

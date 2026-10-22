@@ -979,11 +979,10 @@ def test_browser_image_upload_and_thread_attachment_journey(browser_context):
     page.select_option("#thread-category", index=0)
     page.fill("#thread-content", "Initial technical specification description with detailed components.")
 
-    # 5. Set up a valid 1x1 PNG file to upload
+    # 5. Set up a valid 1x1 PNG file to upload (clean RGBA 1x1 PNG)
     png_bytes = (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-        b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
     )
     page.set_input_files(
         "#thread-image-input",

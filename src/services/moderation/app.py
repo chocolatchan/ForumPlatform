@@ -5,6 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, Query, Request, status
@@ -355,10 +356,10 @@ async def list_own_reports(
     dependencies=[Depends(require_role("admin", "moderator"))],
 )
 async def list_moderation_reports(
-    status_filter: str | None = Query(
-        default=None, alias="status", enum=["pending", "reviewing", "actioned", "dismissed"]
+    status_filter: Literal["pending", "reviewing", "actioned", "dismissed"] | None = Query(
+        default=None, alias="status"
     ),
-    target_type: str | None = Query(default=None, enum=["thread", "comment", "account"]),
+    target_type: Literal["thread", "comment", "account"] | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=50),
     cursor: str | None = None,
 ) -> JSONResponse:
@@ -804,7 +805,7 @@ async def apply_proactive_moderation_action(
     dependencies=[Depends(require_role("admin", "moderator"))],
 )
 async def list_moderation_actions(
-    target_type: str | None = Query(default=None, enum=["thread", "comment", "account"]),
+    target_type: Literal["thread", "comment", "account"] | None = Query(default=None),
     target_id: uuid.UUID | None = None,
     moderator_id: uuid.UUID | None = None,
     limit: int = Query(default=20, ge=1, le=50),
