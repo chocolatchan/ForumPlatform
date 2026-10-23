@@ -107,6 +107,7 @@ class EmailDelivery(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

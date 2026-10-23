@@ -72,6 +72,10 @@ def test_gateway_router_routing():
     # Unknown
     assert router.resolve("nonexistent_unknown_service") is None
 
+    # Test-only routes are not part of the public gateway surface.
+    assert router.resolve("test/otp") is None
+    assert router.resolve("test/reset-rate-limiters") is None
+
 
 @pytest.mark.asyncio
 async def test_gateway_health():
@@ -87,6 +91,23 @@ async def test_gateway_route_not_found():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/v1/nonexistent_prefix_path")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "ROUTE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/v1/test/reset-rate-limiters"),
+        ("GET", "/api/v1/test/otp?recipient=test-route@example.test"),
+    ],
+)
+async def test_gateway_does_not_proxy_test_only_routes(method: str, path: str):
+    """Verify test-only service routes are not reachable through the public gateway."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.request(method, path)
         assert resp.status_code == 404
         assert resp.json()["error"]["code"] == "ROUTE_NOT_FOUND"
 

@@ -61,6 +61,8 @@ from src.services.user.security import (
     hash_secret,
 )
 
+INTERNAL_AUTH_HEADERS = {"X-Internal-Service-Key": os.environ["INTERNAL_SERVICE_SECRET"]}
+
 SEARCH_TEST_DB_PATH = "/tmp/test_forum_search_task012.db"
 SEARCH_TEST_DB_URL = f"sqlite+aiosqlite:///{SEARCH_TEST_DB_PATH}"
 
@@ -347,6 +349,7 @@ async def test_visibility_policy_and_moderation_lifecycle():
         mod_event_id = uuid.uuid4()
         mod_res = await client.post(
             "/internal/events",
+            headers=INTERNAL_AUTH_HEADERS,
             json={
                 "event_id": str(mod_event_id),
                 "event_type": "ModerationActionApplied",
@@ -393,7 +396,7 @@ async def test_domain_event_ingestion_and_idempotency():
         }
 
         # 1. Ingest event first time
-        resp1 = await client.post("/internal/events", json=payload)
+        resp1 = await client.post("/internal/events", json=payload, headers=INTERNAL_AUTH_HEADERS)
         assert resp1.status_code == 200
         assert resp1.json()["status"] == "processed"
         assert resp1.json()["document_updated"] is True
@@ -414,7 +417,7 @@ async def test_domain_event_ingestion_and_idempotency():
             assert c_event.event_type == "ThreadCreated"
 
         # 2. Ingest same event again (Duplicate delivery)
-        resp2 = await client.post("/internal/events", json=payload)
+        resp2 = await client.post("/internal/events", json=payload, headers=INTERNAL_AUTH_HEADERS)
         assert resp2.status_code == 200
         assert resp2.json()["status"] == "processed"
         assert resp2.json()["document_updated"] is False  # Deduplicated
@@ -431,7 +434,9 @@ async def test_domain_event_ingestion_and_idempotency():
                 "body": "Updated domain modeling patterns.",
             },
         }
-        resp3 = await client.post("/internal/events", json=update_payload)
+        resp3 = await client.post(
+            "/internal/events", json=update_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert resp3.status_code == 200
 
         async with search_db_mod.search_db.session() as session:
@@ -448,7 +453,7 @@ async def test_domain_event_ingestion_and_idempotency():
             "producer": "interaction-service",
             "data": {"thread_id": str(thread_id), "increment": 5},
         }
-        await client.post("/internal/events", json=vc_payload)
+        await client.post("/internal/events", json=vc_payload, headers=INTERNAL_AUTH_HEADERS)
 
         async with search_db_mod.search_db.session() as session:
             stmt = select(SearchDocument).where(SearchDocument.source_id == thread_id)
@@ -463,7 +468,7 @@ async def test_domain_event_ingestion_and_idempotency():
             "producer": "content-service",
             "data": {"thread_id": str(thread_id)},
         }
-        await client.post("/internal/events", json=del_payload)
+        await client.post("/internal/events", json=del_payload, headers=INTERNAL_AUTH_HEADERS)
 
         async with search_db_mod.search_db.session() as session:
             stmt = select(SearchDocument).where(SearchDocument.source_id == thread_id)

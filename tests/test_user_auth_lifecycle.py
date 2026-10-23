@@ -41,6 +41,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 import src.gateway.app as gateway_app_mod
 import src.services.user.app as user_app_mod
@@ -49,12 +50,14 @@ from src.common.database import DatabaseSessionManager
 from src.gateway.app import app as gateway_app
 from src.services.user.app import app as user_app
 from src.services.user.config import user_settings
-from src.services.user.models import Account, PendingRegistration
+from src.services.user.models import Account, OneTimeToken, PendingRegistration
 from src.services.user.models import Base as UserBase
 from src.services.user.otp_delivery import otp_delivery_sink
 from src.services.user.security import (
+    GeneratedOtp,
     generate_otp,
     hash_password,
+    hash_secret,
 )
 
 AUTH_TEST_DB_PATH = "/tmp/test_forum_auth_task006.db"
@@ -962,3 +965,340 @@ async def test_password_recovery_and_reset_lifecycle():
         )
         assert new_login.status_code == 200
         assert new_login.json()["user"]["username"] == "recovery_user"
+
+
+async def _seed_recovery_account(email: str, username: str) -> uuid.UUID:
+    """Create an active account for recovery-token cardinality tests."""
+    account_id = uuid.uuid4()
+    async with user_db_module.user_db.transaction() as session:
+        session.add(
+            Account(
+                id=account_id,
+                username=username,
+                username_normalized=username.lower(),
+                email=email,
+                email_normalized=email.lower(),
+                password_hash=hash_password("Password123!"),
+                role="member",
+                is_banned=False,
+            )
+        )
+    return account_id
+
+
+def _build_recovery_token(
+    account_id: uuid.UUID,
+    otp: GeneratedOtp,
+    *,
+    created_at: datetime,
+    consumed_at: datetime | None = None,
+) -> OneTimeToken:
+    """Build a recovery token with deterministic ordering metadata."""
+    return OneTimeToken(
+        id=uuid.uuid4(),
+        account_id=account_id,
+        purpose="password_recovery",
+        token_hash=otp.code_hash,
+        expires_at=otp.expires_at,
+        attempts=0,
+        resend_count=0,
+        resend_after=created_at + timedelta(seconds=60),
+        consumed_at=consumed_at,
+        created_at=created_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_recovery_request_normalizes_duplicate_unconsumed_tokens():
+    """A legacy duplicate must not make recovery request raise a multiple-row error."""
+    suffix = uuid.uuid4().hex[:8]
+    email = f"recovery_dup_request_{suffix}@example.test"
+    username = f"recovery_dup_request_{suffix}"
+    user_settings.dev_email_allowlist = f"{user_settings.dev_email_allowlist},{email}"
+    account_id = await _seed_recovery_account(email, username)
+
+    now = datetime.now(UTC)
+    older_token = _build_recovery_token(
+        account_id,
+        generate_otp(ttl_seconds=900),
+        created_at=now - timedelta(minutes=5),
+    )
+    newer_token = _build_recovery_token(
+        account_id,
+        generate_otp(ttl_seconds=900),
+        created_at=now - timedelta(minutes=2),
+    )
+    async with user_db_module.user_db.transaction() as session:
+        session.add_all([older_token, newer_token])
+
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/test/reset-rate-limiters")
+
+        response = await client.post(
+            "/auth/recovery/request",
+            json={"email": email},
+        )
+        assert response.status_code == 202
+        delivered_otp = otp_delivery_sink.get_latest_otp(email, purpose="recovery")
+        assert delivered_otp is not None
+
+        # A repeated request during cooldown must not issue a second challenge.
+        repeated = await client.post(
+            "/auth/recovery/request",
+            json={"email": email},
+        )
+        assert repeated.status_code == 202
+        assert otp_delivery_sink.get_latest_otp(email, purpose="recovery") == delivered_otp
+
+    async with user_db_module.user_db.session() as session:
+        tokens = (
+            (
+                await session.execute(
+                    select(OneTimeToken).where(OneTimeToken.account_id == account_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    tokens_by_id = {token.id: token for token in tokens}
+    assert tokens_by_id[older_token.id].consumed_at is not None
+    assert tokens_by_id[newer_token.id].consumed_at is not None
+
+    active_tokens = [token for token in tokens if token.consumed_at is None]
+    assert len(active_tokens) == 1
+    assert active_tokens[0].token_hash == hash_secret(delivered_otp)
+
+
+@pytest.mark.asyncio
+async def test_recovery_verify_uses_newest_duplicate_and_consumes_older():
+    """Only the newest duplicate challenge can verify, and tickets remain single-use."""
+    suffix = uuid.uuid4().hex[:8]
+    email = f"recovery_dup_verify_{suffix}@example.test"
+    username = f"recovery_dup_verify_{suffix}"
+    account_id = await _seed_recovery_account(email, username)
+
+    now = datetime.now(UTC)
+    older_otp = generate_otp(ttl_seconds=900)
+    newer_otp = generate_otp(ttl_seconds=900)
+    older_token = _build_recovery_token(
+        account_id,
+        older_otp,
+        created_at=now - timedelta(minutes=5),
+    )
+    newer_token = _build_recovery_token(
+        account_id,
+        newer_otp,
+        created_at=now - timedelta(minutes=2),
+    )
+    already_consumed = _build_recovery_token(
+        account_id,
+        generate_otp(ttl_seconds=900),
+        created_at=now - timedelta(minutes=10),
+        consumed_at=now - timedelta(minutes=9),
+    )
+    async with user_db_module.user_db.transaction() as session:
+        session.add_all([older_token, newer_token, already_consumed])
+
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/test/reset-rate-limiters")
+
+        verified = await client.post(
+            "/auth/recovery/verify",
+            json={"email": email, "otp": newer_otp.code},
+        )
+        assert verified.status_code == 200
+        reset_token = verified.json()["reset_token"]
+
+        # The older duplicate must have been consumed and cannot be replayed.
+        old_otp_replay = await client.post(
+            "/auth/recovery/verify",
+            json={"email": email, "otp": older_otp.code},
+        )
+        assert old_otp_replay.status_code == 400
+        assert old_otp_replay.json()["error"]["code"] == "INVALID_OTP"
+
+        reset = await client.post(
+            "/auth/recovery/reset",
+            json={"reset_token": reset_token, "new_password": "NewPassword456!"},
+        )
+        assert reset.status_code == 204
+
+        reset_replay = await client.post(
+            "/auth/recovery/reset",
+            json={"reset_token": reset_token, "new_password": "AnotherPassword789!"},
+        )
+        assert reset_replay.status_code == 400
+        assert reset_replay.json()["error"]["code"] == "INVALID_RESET_TOKEN"
+
+    async with user_db_module.user_db.session() as session:
+        recovery_tokens = (
+            (
+                await session.execute(
+                    select(OneTimeToken).where(
+                        OneTimeToken.account_id == account_id,
+                        OneTimeToken.purpose == "password_recovery",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert all(token.consumed_at is not None for token in recovery_tokens)
+
+
+@pytest.mark.asyncio
+async def test_recovery_verify_consumes_expired_duplicate_tokens_without_error():
+    """Expired duplicate rows must return OTP_EXPIRED and be fully consumed."""
+    suffix = uuid.uuid4().hex[:8]
+    email = f"recovery_dup_expired_{suffix}@example.test"
+    username = f"recovery_dup_expired_{suffix}"
+    account_id = await _seed_recovery_account(email, username)
+
+    now = datetime.now(UTC)
+    expired_otp_one = generate_otp(ttl_seconds=-300)
+    expired_otp_two = generate_otp(ttl_seconds=-300)
+    expired_one = _build_recovery_token(
+        account_id,
+        expired_otp_one,
+        created_at=now - timedelta(minutes=20),
+    )
+    expired_two = _build_recovery_token(
+        account_id,
+        expired_otp_two,
+        created_at=now - timedelta(minutes=15),
+    )
+    async with user_db_module.user_db.transaction() as session:
+        session.add_all([expired_one, expired_two])
+
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/test/reset-rate-limiters")
+
+        expired = await client.post(
+            "/auth/recovery/verify",
+            json={"email": email, "otp": expired_otp_one.code},
+        )
+        assert expired.status_code == 400
+        assert expired.json()["error"]["code"] == "OTP_EXPIRED"
+
+        no_challenge = await client.post(
+            "/auth/recovery/verify",
+            json={"email": email, "otp": expired_otp_two.code},
+        )
+        assert no_challenge.status_code == 400
+        assert no_challenge.json()["error"]["code"] == "INVALID_OTP"
+
+    async with user_db_module.user_db.session() as session:
+        recovery_tokens = (
+            (
+                await session.execute(
+                    select(OneTimeToken).where(
+                        OneTimeToken.account_id == account_id,
+                        OneTimeToken.purpose == "password_recovery",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert all(token.consumed_at is not None for token in recovery_tokens)
+
+
+@pytest.mark.asyncio
+async def test_change_email_request_requires_password():
+    """The email-change request schema requires re-authentication.
+
+    Missing or null passwords are rejected by request validation (422), an
+    incorrect password reaches the handler and returns 400 INVALID_PASSWORD,
+    and a correct password still starts the change flow.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    username = f"email_contract_{suffix}"
+    email = f"email_contract_{suffix}@example.test"
+    new_email = f"email_contract_new_{suffix}@example.test"
+    password = "InitialPassword123!"
+
+    # The delivery allowlist is restored by the autouse fixture after this test.
+    user_settings.dev_email_allowlist = (
+        f"{user_settings.dev_email_allowlist},{email},{new_email}"
+    )
+
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        reg_res = await client.post(
+            "/auth/register",
+            json={"username": username, "email": email, "password": password},
+        )
+        assert reg_res.status_code == 202
+        otp = otp_delivery_sink.get_latest_otp(email)
+        assert otp is not None
+        verify_res = await client.post(
+            "/auth/register/verify",
+            json={"email": email, "otp": otp},
+        )
+        assert verify_res.status_code == 201
+
+        login_res = await client.post(
+            "/auth/login",
+            json={"login": username, "password": password},
+        )
+        assert login_res.status_code == 200
+
+        csrf_token = (await client.get("/auth/csrf")).json()["csrf_token"]
+        csrf_headers = {"X-CSRF-Token": csrf_token}
+
+        # Missing password -> schema validation, never reaches the handler.
+        missing_res = await client.post(
+            "/profile/change-email/request",
+            headers=csrf_headers,
+            json={"new_email": new_email},
+        )
+        assert missing_res.status_code == 422
+        assert missing_res.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert any(
+            detail["field"] == "password"
+            for detail in missing_res.json()["error"]["details"]
+        )
+
+        # Explicit null -> schema validation.
+        null_res = await client.post(
+            "/profile/change-email/request",
+            headers=csrf_headers,
+            json={"new_email": new_email, "password": None},
+        )
+        assert null_res.status_code == 422
+        assert null_res.json()["error"]["code"] == "VALIDATION_ERROR"
+
+        # Incorrect password reaches the handler -> 400 INVALID_PASSWORD.
+        wrong_res = await client.post(
+            "/profile/change-email/request",
+            headers=csrf_headers,
+            json={"new_email": new_email, "password": "WrongPassword999!"},
+        )
+        assert wrong_res.status_code == 400
+        assert wrong_res.json()["error"]["code"] == "INVALID_PASSWORD"
+
+        # Correct password starts the workflow and delivers an email-change OTP.
+        ok_res = await client.post(
+            "/profile/change-email/request",
+            headers=csrf_headers,
+            json={"new_email": new_email, "password": password},
+        )
+        assert ok_res.status_code == 202
+        assert otp_delivery_sink.get_latest_otp(new_email, purpose="email_change") is not None
+
+    # The generated OpenAPI body schema marks password as required.
+    schema = user_app.openapi()
+    request_schema = schema["paths"]["/profile/change-email/request"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]
+    if "$ref" in request_schema:
+        component = request_schema["$ref"].rsplit("/", 1)[-1]
+        request_schema = schema["components"]["schemas"][component]
+    assert "password" in request_schema.get("required", [])
+    assert "new_email" in request_schema.get("required", [])

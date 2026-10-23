@@ -4,6 +4,7 @@ from alembic import context
 
 from migrations.async_env import run_service_migrations
 from src.common.models import Base
+from src.services.notification import models as notification_models  # noqa: F401
 
 run_service_migrations(
     alembic_config=context.config,

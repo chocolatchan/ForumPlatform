@@ -413,25 +413,77 @@ async def test_tampered_csrf_token_rejected_on_logout():
 
 
 @pytest.mark.asyncio
-async def test_test_endpoint_safety_in_production():
-    """Verify test-only endpoints (/test/otp, /test/reset-rate-limiters) return 404 in production."""
+async def test_test_endpoints_allowed_in_development_and_test():
+    """Verify the hooks remain available when development/test is explicit."""
+    transport = ASGITransport(app=user_app)
+    orig_env = user_settings.environment
+    test_recipient = "test-route@example.test"
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            for environment in ("development", "test"):
+                user_settings.environment = environment
+
+                reset_response = await client.post("/test/reset-rate-limiters")
+                assert reset_response.status_code == 200
+
+                otp_delivery_sink.deliver(
+                    test_recipient,
+                    "123456",
+                    "register",
+                    datetime.now(UTC),
+                )
+                otp_response = await client.get(f"/test/otp?recipient={test_recipient}")
+                assert otp_response.status_code == 200
+                assert otp_response.json() == {"code": "123456"}
+    finally:
+        user_settings.environment = orig_env
+        otp_delivery_sink.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "environment",
+    ["staging", "production", "", "prod", "staging "],
+)
+async def test_test_endpoints_blocked_outside_development_and_test(environment: str):
+    """Verify staging, production, and invalid environment values fail closed."""
+    transport = ASGITransport(app=user_app)
+    orig_env = user_settings.environment
+    try:
+        user_settings.environment = environment
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            reset_response = await client.post("/test/reset-rate-limiters")
+            assert reset_response.status_code == 404
+
+            otp_response = await client.get("/test/otp?recipient=test-route@example.test")
+            assert otp_response.status_code == 404
+
+            # The guard must run before query validation so a malformed
+            # request cannot reveal that the route exists.
+            malformed_otp_response = await client.get("/test/otp")
+            assert malformed_otp_response.status_code == 404
+    finally:
+        user_settings.environment = orig_env
+
+
+@pytest.mark.asyncio
+async def test_test_endpoints_blocked_when_environment_is_missing(monkeypatch):
+    """Verify an unset environment does not silently enable test hooks."""
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    missing_settings = UserSettings(
+        _env_file=None,
+        database_url="sqlite+aiosqlite:///tmp/test_missing_environment.db",
+        internal_service_secret="x" * 40,
+    )
+    assert missing_settings.environment == "development"
+    assert "environment" not in missing_settings.model_fields_set
+    assert missing_settings.test_endpoints_enabled is False
+
+    monkeypatch.setattr(user_app_mod, "user_settings", missing_settings)
     transport = ASGITransport(app=user_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # In non-production, reset-rate-limiters works
-        res_dev = await client.post("/test/reset-rate-limiters")
-        assert res_dev.status_code == 200
-
-        # Simulate production environment
-        orig_env = user_settings.environment
-        try:
-            user_settings.environment = "production"
-            res_prod_reset = await client.post("/test/reset-rate-limiters")
-            assert res_prod_reset.status_code == 404
-
-            res_prod_otp = await client.get("/test/otp?recipient=test@example.com")
-            assert res_prod_otp.status_code == 404
-        finally:
-            user_settings.environment = orig_env
+        assert (await client.post("/test/reset-rate-limiters")).status_code == 404
+        assert (await client.get("/test/otp?recipient=test-route@example.test")).status_code == 404
 
 
 @pytest.mark.asyncio

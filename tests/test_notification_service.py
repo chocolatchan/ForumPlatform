@@ -59,6 +59,8 @@ from src.services.user.security import (
     hash_secret,
 )
 
+INTERNAL_AUTH_HEADERS = {"X-Internal-Service-Key": os.environ["INTERNAL_SERVICE_SECRET"]}
+
 NOTIFICATION_TEST_DB_PATH = "/tmp/test_forum_notification_task011.db"
 NOTIFICATION_TEST_DB_URL = f"sqlite+aiosqlite:///{NOTIFICATION_TEST_DB_PATH}"
 
@@ -333,7 +335,9 @@ async def test_event_processing_and_idempotency():
         }
 
         # First ingestion -> should create 1 notification
-        res = await client.post("/internal/events", json=event_payload)
+        res = await client.post(
+            "/internal/events", json=event_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res.status_code == 200
         assert res.json()["notifications_created"] == 1
 
@@ -346,7 +350,9 @@ async def test_event_processing_and_idempotency():
         assert "Great article" in notif["body"]
 
         # Duplicate ingestion of same event_id -> should be deduplicated (0 created)
-        res_dup = await client.post("/internal/events", json=event_payload)
+        res_dup = await client.post(
+            "/internal/events", json=event_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res_dup.status_code == 200
         assert res_dup.json()["notifications_created"] == 0
 
@@ -366,7 +372,9 @@ async def test_event_processing_and_idempotency():
                 "body_preview": "I commented on my own thread",
             },
         }
-        res_self = await client.post("/internal/events", json=self_event_payload)
+        res_self = await client.post(
+            "/internal/events", json=self_event_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res_self.status_code == 200
         assert res_self.json()["notifications_created"] == 0
 
@@ -380,7 +388,9 @@ async def test_event_processing_and_idempotency():
                 "comment_author_id": str(user_id),
             },
         }
-        res_ba = await client.post("/internal/events", json=best_answer_payload)
+        res_ba = await client.post(
+            "/internal/events", json=best_answer_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res_ba.status_code == 200
         assert res_ba.json()["notifications_created"] == 1
 
@@ -396,7 +406,9 @@ async def test_event_processing_and_idempotency():
                 "reason": "Thread locked due to controversy",
             },
         }
-        res_mod = await client.post("/internal/events", json=mod_action_payload)
+        res_mod = await client.post(
+            "/internal/events", json=mod_action_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res_mod.status_code == 200
         assert res_mod.json()["notifications_created"] == 1
 
@@ -425,7 +437,9 @@ async def test_event_processing_and_idempotency():
                 "target_id": str(uuid.uuid4()),
             },
         }
-        res_upvote = await client.post("/internal/events", json=upvote_payload)
+        res_upvote = await client.post(
+            "/internal/events", json=upvote_payload, headers=INTERNAL_AUTH_HEADERS
+        )
         assert res_upvote.status_code == 200
         assert res_upvote.json()["notifications_created"] == 0
 

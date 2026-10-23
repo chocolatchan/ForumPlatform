@@ -28,8 +28,15 @@ class BaseServiceSettings(BaseSettings):
 
     # Inter-service authentication & Proxy trust
     internal_service_secret: str = Field(
-        default="default-internal-service-secret-key-32chars",
+        default="",
         description="Shared secret for internal service-to-service calls",
+    )
+    internal_service_auth_bypass: bool = Field(
+        default=False,
+        description=(
+            "Explicitly allow missing internal credentials only when ENVIRONMENT is "
+            "explicitly development or test. Missing or other environments are rejected."
+        ),
     )
     trusted_proxies: list[str] = Field(
         default_factory=lambda: ["127.0.0.1", "::1", "gateway"],
@@ -71,9 +78,31 @@ class BaseServiceSettings(BaseSettings):
             )
         return v
 
+    @field_validator("internal_service_secret")
+    @classmethod
+    def validate_internal_service_secret_not_empty(cls, v: str) -> str:
+        """Reject missing or whitespace-only internal credentials."""
+        if not v.strip():
+            raise ValueError("INTERNAL_SERVICE_SECRET must not be empty.")
+        return v
+
     @model_validator(mode="after")
     def validate_staging_production_secrets(self) -> Self:
         """Enforce strict configuration rules for staging and production environments."""
+        if self.internal_service_auth_bypass:
+            # The bypass is fail-closed: require an explicit development/test
+            # environment rather than trusting the default "development" value.
+            if "environment" not in self.model_fields_set:
+                raise ValueError(
+                    "INTERNAL_SERVICE_AUTH_BYPASS requires ENVIRONMENT to be explicitly set "
+                    "to development or test."
+                )
+            if self.environment not in ("development", "test"):
+                raise ValueError(
+                    f"{self.environment.capitalize()} must not enable "
+                    "INTERNAL_SERVICE_AUTH_BYPASS; the bypass is restricted to development and test."
+                )
+
         if self.environment in ("staging", "production"):
             # Check CSRF secret if present on settings instance first for backward compatibility
             csrf_val = getattr(self, "csrf_secret", None)
@@ -89,8 +118,11 @@ class BaseServiceSettings(BaseSettings):
 
             insecure_key_defaults = {
                 "default-internal-service-secret-key-32chars",
+                "default-dev-internal-key",
+                "replace-with-secure-internal-secret-min-32-chars",
                 "replace-with-a-secure-random-secret-key-min-32-chars",
                 "replace-with-random-csrf-secret-key",
+                "staging-internal-service-secret-must-be-32-chars-long",
                 "forum_dev_password",
             }
             if (

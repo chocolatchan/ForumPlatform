@@ -11,7 +11,6 @@ Ensures at-least-once, resilient outbound delivery of queued domain event emails
 
 import asyncio
 import contextlib
-import html
 import logging
 import random
 import smtplib
@@ -20,8 +19,7 @@ from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Any
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, select
 
 from src.common.database import DatabaseSessionManager
 from src.services.notification.config import notification_settings
@@ -258,8 +256,25 @@ class EmailDispatchWorker:
         logger.info("Notification EmailDispatchWorker stopped.")
 
     async def _run_loop(self) -> None:
+        # Always attempt recovery on startup so rows orphaned by a crash or
+        # by a rolling deploy are reclaimed before new dispatches begin.
+        try:
+            await self.recover_stale_leases()
+        except Exception as e:
+            logger.error(
+                "Startup lease recovery failed (will retry periodically): %s", e, exc_info=True
+            )
+        last_recovery = datetime.now(UTC)
         while self._running:
             try:
+                now = datetime.now(UTC)
+                # Periodic lease recovery every lease_timeout/2 seconds (at least every 60s)
+                recovery_interval = max(
+                    60.0, notification_settings.email_worker_lease_timeout_seconds / 2
+                )
+                if (now - last_recovery).total_seconds() >= recovery_interval:
+                    await self.recover_stale_leases()
+                    last_recovery = now
                 processed = await self.process_batch()
                 if processed == 0:
                     await asyncio.sleep(self.poll_interval)
@@ -268,6 +283,72 @@ class EmailDispatchWorker:
             except Exception as e:
                 logger.error("Unexpected error in EmailDispatchWorker loop: %s", e, exc_info=True)
                 await asyncio.sleep(self.poll_interval)
+
+    async def recover_stale_leases(self) -> int:
+        """Recover EmailDelivery rows stuck in 'sending' whose lease has expired.
+
+        Uses SELECT FOR UPDATE SKIP LOCKED to safely handle concurrent workers.
+        Rows are moved back to 'failed' if attempts < max_attempts, else 'dead_letter'.
+
+        A row is considered an orphaned lease when:
+        - `sending_since` is older than `email_worker_lease_timeout_seconds`, or
+        - `sending_since` is NULL (row claimed by pre-lease code or a crash
+          between the status update and the lease timestamp update; new code
+          always sets both in the same transaction, so NULL implies a crash).
+
+        Attempt counting: the crashed attempt is counted (attempts += 1) because
+        the worker cannot know whether the SMTP server accepted the message.
+        A row that exhausts max_attempts through repeated crashes lands in
+        dead_letter instead of being retried forever.
+
+        IMPORTANT: There is an inherent delivery ambiguity. If the worker crashes AFTER
+        the SMTP server accepted the message but BEFORE the database recorded 'delivered',
+        recovery will increment `attempts` and re-dispatch. The recipient may receive a
+        duplicate email. This implementation provides at-least-once (not exactly-once)
+        delivery semantics.
+        """
+        now = datetime.now(UTC)
+        lease_cutoff = now - timedelta(seconds=notification_settings.email_worker_lease_timeout_seconds)
+        recovered = 0
+
+        async with self.db.transaction() as session:
+            stmt = (
+                select(EmailDelivery)
+                .where(
+                    EmailDelivery.status == "sending",
+                    or_(
+                        EmailDelivery.sending_since <= lease_cutoff,
+                        EmailDelivery.sending_since.is_(None),
+                    ),
+                )
+                .order_by(EmailDelivery.sending_since.asc().nulls_first())
+                .limit(self.batch_size)
+                .with_for_update(skip_locked=True)
+            )
+            result = await session.execute(stmt)
+            stale_rows = list(result.scalars().all())
+
+            for row in stale_rows:
+                row.sending_since = None
+                row.last_error = "Worker lease expired (crash or timeout recovery)"
+                row.attempts += 1  # count the crashed attempt
+                if row.attempts >= row.max_attempts:
+                    row.status = "dead_letter"
+                    logger.error(
+                        "Email delivery %s moved to dead_letter via lease recovery: attempts=%d",
+                        row.id, row.attempts,
+                    )
+                else:
+                    row.status = "failed"
+                    backoff = calculate_email_backoff(row.attempts)
+                    row.next_attempt_at = now + timedelta(seconds=backoff)
+                    logger.warning(
+                        "Email delivery %s recovered from stale lease: attempts=%d/%d, retry in %.1fs",
+                        row.id, row.attempts, row.max_attempts, backoff,
+                    )
+                recovered += 1
+
+        return recovered
 
     async def process_batch(self) -> int:
         """Claim a batch of pending/failed emails and attempt delivery.
@@ -296,6 +377,7 @@ class EmailDispatchWorker:
 
             for d in deliveries:
                 d.status = "sending"
+                d.sending_since = datetime.now(UTC)
                 claimed_ids.append((d.id, d))
 
         if not claimed_ids:
@@ -331,8 +413,10 @@ class EmailDispatchWorker:
                     d_row.status = "delivered"
                     d_row.delivered_at = curr_now
                     d_row.last_error = None
+                    d_row.sending_since = None
                 else:
                     d_row.last_error = err_msg
+                    d_row.sending_since = None
                     if rejected or d_row.attempts >= d_row.max_attempts:
                         d_row.status = "dead_letter"
                         logger.error(

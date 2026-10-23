@@ -13,7 +13,7 @@ Coverage:
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -21,7 +21,6 @@ from sqlalchemy import select
 
 import src.services.notification.database as notif_db_module
 from src.common.database import DatabaseSessionManager
-from src.services.notification.config import NotificationSettings, notification_settings
 from src.services.notification.email_worker import (
     EmailDispatchWorker,
     EmailWorkerDeliveryError,
@@ -32,9 +31,9 @@ from src.services.notification.email_worker import (
 )
 from src.services.notification.models import (
     Base as NotificationBase,
-    ConsumedEvent,
+)
+from src.services.notification.models import (
     EmailDelivery,
-    NotificationItem,
     NotificationPreference,
 )
 from src.services.notification.schemas import ConsumedEventPayload
@@ -49,18 +48,24 @@ NOTIF_TEST_DB_URL = "sqlite+aiosqlite:////tmp/test_forum_task031_email_worker.db
 
 @pytest_asyncio.fixture(scope="module")
 async def notif_db():
-    """Shared in-memory SQLite database for the full module scope."""
+    """Shared SQLite database for the full module scope.
+
+    DatabaseSessionManager ATTACHes per-schema SQLite files for file-backed URLs,
+    so schema-qualified notification tables work without mutating the shared
+    MetaData (which is shared across all services and would break other test
+    modules if schemas were stripped).
+    """
     import os
+    import shutil
 
     db_path = "/tmp/test_forum_task031_email_worker.db"
     if os.path.exists(db_path):
         os.remove(db_path)
+    if os.path.exists("/tmp/sqlite_schemas"):
+        shutil.rmtree("/tmp/sqlite_schemas")
 
     mgr = DatabaseSessionManager(NOTIF_TEST_DB_URL)
     async with mgr.engine.begin() as conn:
-        # SQLite doesn't support schemas; patch the schema out temporarily
-        for t in NotificationBase.metadata.tables.values():
-            t.schema = None
         await conn.run_sync(NotificationBase.metadata.create_all)
 
     yield mgr
@@ -120,7 +125,10 @@ class TestCalculateEmailBackoff:
     def test_increases_with_attempts(self):
         """Median backoff should grow with attempt number."""
         # Average over many samples to reduce jitter noise
-        avg = lambda n: sum(calculate_email_backoff(n) for _ in range(50)) / 50
+
+        def avg(n: int) -> float:
+            return sum(calculate_email_backoff(n) for _ in range(50)) / 50
+
         assert avg(2) > avg(1)
         assert avg(3) > avg(2)
         assert avg(4) > avg(3)

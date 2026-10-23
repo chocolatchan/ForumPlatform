@@ -71,13 +71,18 @@ When `outbox_worker_dead_letter_total > 0`:
 
 ### 4.1 Internal Service Key Rotation (`INTERNAL_SERVICE_SECRET`)
 The internal service secret authenticates direct service-to-service calls over `/internal/events`.
+The current implementation accepts one shared secret at a time; it does not support a
+current-plus-next key overlap.
+
 1. Generate new 32+ character random secret:
    ```bash
    openssl rand -hex 32
    ```
-2. Update `INTERNAL_SERVICE_SECRET` in `.env`.
-3. To achieve zero-downtime rotation, deploy consumers first (supporting both current and next keys if multi-key auth is configured) or perform a rolling restart:
-   ```bash
-   docker compose up -d
-   ```
-4. Outbox workers will automatically reconnect and use the updated secret. Any temporary 401s during the restart window will retry and clear.
+2. Update `INTERNAL_SERVICE_SECRET` in the protected deployment environment file.
+3. Treat rotation as a controlled single-cutover, not a mixed-version rolling restart:
+   stop the six application services, recreate all of them with the same new secret,
+   and then verify health and internal authentication. Outbox events remain persisted in
+   PostgreSQL and retry after the cutover.
+4. Do not enable `INTERNAL_SERVICE_AUTH_BYPASS` or otherwise disable authentication as a
+   rotation shortcut. For the full ordered transition and rollback requirements, see
+   `docs/audit/task_031_2_10_internal_auth_deployment_readiness_report.md`.

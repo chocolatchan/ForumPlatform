@@ -104,6 +104,20 @@ class UserSettings(BaseServiceSettings):
             return self.session_cookie_secure
         return self.environment in ("staging", "production")
 
+    @property
+    def test_endpoints_enabled(self) -> bool:
+        """Return whether test-only HTTP hooks may be served.
+
+        The hooks require an explicitly configured development or test
+        environment. A missing environment falls back to the development
+        default for ordinary settings, but deliberately does not enable the
+        hooks. Unknown or non-development/test values also fail closed.
+        """
+        return "environment" in self.model_fields_set and self.environment in (
+            "development",
+            "test",
+        )
+
     @model_validator(mode="after")
     def validate_production_security(self) -> "Self":
         """Enforce strict secret safety in production environment."""

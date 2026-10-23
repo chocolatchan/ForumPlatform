@@ -39,6 +39,7 @@ from src.services.moderation.models import Base as ModerationBase
 from src.services.notification.auth import set_auth_http_client as set_notification_auth_client
 from src.services.notification.models import Base as NotificationBase
 from src.services.search.auth import set_auth_http_client as set_search_auth_client
+from src.services.search.config import search_settings
 from src.services.search.models import Base as SearchBase
 from src.services.user.models import Account
 from src.services.user.models import Base as UserBase
@@ -288,9 +289,7 @@ class BenchmarkHarness:
             for th in self.test_threads:
                 await sc.post(
                     "/internal/events",
-                    headers={
-                        "X-Internal-Service-Key": "default-internal-service-secret-key-32chars"
-                    },
+                    headers={"X-Internal-Service-Key": search_settings.internal_service_secret},
                     json={
                         "event_id": str(uuid.uuid4()),
                         "event_type": "ThreadCreated",
@@ -548,7 +547,7 @@ async def run_all_benchmarks(output_file: str = "docs/benchmarks/benchmark_resul
             "Search Event Ingestion Burst & Deduplication",
             lambda idx: sc.post(
                 "/internal/events",
-                headers={"X-Internal-Service-Key": "default-internal-service-secret-key-32chars"},
+                headers={"X-Internal-Service-Key": search_settings.internal_service_secret},
                 json={
                     "event_id": str(uuid.uuid4()),
                     "event_type": "ThreadCreated",

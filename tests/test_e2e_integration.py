@@ -86,6 +86,8 @@ from src.services.user.security import (
     hash_secret,
 )
 
+INTERNAL_AUTH_HEADERS = {"X-Internal-Service-Key": os.environ["INTERNAL_SERVICE_SECRET"]}
+
 E2E_TEST_DB_PATH = "/tmp/test_forum_e2e_task013.db"
 E2E_TEST_DB_URL = f"sqlite+aiosqlite:///{E2E_TEST_DB_PATH}"
 
@@ -420,7 +422,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     async with AsyncClient(transport=search_transport, base_url="http://test") as search_client:
         await search_client.post(
             "/internal/events",
-            headers={"X-Internal-Service-Key": "default-internal-service-secret-key-32chars"},
+            headers=INTERNAL_AUTH_HEADERS,
             json={
                 "event_id": str(uuid.uuid4()),
                 "event_type": "ThreadCreated",
@@ -451,7 +453,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     async with AsyncClient(transport=notif_transport, base_url="http://test") as notif_client:
         await notif_client.post(
             "/internal/events",
-            headers={"X-Internal-Service-Key": "default-internal-service-secret-key-32chars"},
+            headers=INTERNAL_AUTH_HEADERS,
             json={
                 "event_id": str(uuid.uuid4()),
                 "event_type": "CommentCreated",
@@ -521,7 +523,7 @@ async def test_e2e_discussion_moderation_notification_and_search_workflow(
     async with AsyncClient(transport=content_transport, base_url="http://test") as content_client:
         v_prop = await content_client.post(
             "/internal/events",
-            headers={"X-Internal-Service-Key": "default-internal-service-secret-key-32chars"},
+            headers=INTERNAL_AUTH_HEADERS,
             json={
                 "event_type": "ThreadViewCountIncremented",
                 "data": {"thread_id": thread_id, "increment": 1},

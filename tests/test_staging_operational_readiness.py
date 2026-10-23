@@ -9,6 +9,7 @@ Verifies:
 """
 
 import asyncio
+import os
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -28,6 +29,7 @@ from src.services.user.config import UserSettings
 POSTGRES_CONTENT_URL = (
     "postgresql+asyncpg://forum_admin:forum_dev_password@localhost:5432/forum_content"
 )
+TEST_INTERNAL_KEY = os.environ["INTERNAL_SERVICE_SECRET"]
 
 
 # =============================================================================
@@ -128,6 +130,7 @@ async def test_worker_graceful_shutdown_idle(content_db):
         db_manager=content_db,
         model_class=ContentOutboxEvent,
         service_urls={},
+        internal_key=TEST_INTERNAL_KEY,
         poll_interval_seconds=0.1,
     )
     await worker.start()
@@ -150,6 +153,7 @@ async def test_worker_repeated_start_does_not_spawn_duplicate_tasks(content_db):
         db_manager=content_db,
         model_class=ContentOutboxEvent,
         service_urls={},
+        internal_key=TEST_INTERNAL_KEY,
         poll_interval_seconds=0.1,
     )
     await worker.start()
@@ -187,6 +191,7 @@ async def test_worker_shutdown_during_active_dispatch(content_db):
         db_manager=content_db,
         model_class=ContentOutboxEvent,
         service_urls={"search-service": "http://search-service:8006"},
+        internal_key=TEST_INTERNAL_KEY,
         batch_size=1,
         poll_interval_seconds=0.05,
     )

@@ -8,6 +8,7 @@ from fastapi.exceptions import HTTPException
 from sqlalchemy import select
 
 import src.services.user.database as user_db_module
+from src.common.internal_auth import verify_internal_service_request
 from src.common.models import ensure_utc
 from src.services.user.config import user_settings
 from src.services.user.models import Account, Session
@@ -137,22 +138,4 @@ async def verify_csrf_header(request: Request) -> None:
 
 async def verify_internal_service_key(request: Request) -> None:
     """Verify internal service-to-service key for internal endpoints."""
-    key = request.headers.get("X-Internal-Service-Key")
-    expected = user_settings.internal_service_secret
-    if key:
-        if key != expected:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Internal service key invalid.",
-            )
-        return
-
-    # In local testing or direct execution without Gateway, allow if environment is development/test
-    if user_settings.environment in ("development", "test"):
-        return
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Internal service key missing.",
-    )
-
+    verify_internal_service_request(request, user_settings)

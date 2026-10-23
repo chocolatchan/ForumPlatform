@@ -49,6 +49,10 @@ class NotificationSettings(BaseServiceSettings):
     email_worker_batch_size: int = Field(
         default=10, description="Max outbound emails claimed per batch"
     )
+    email_worker_lease_timeout_seconds: int = Field(
+        default=300,
+        description="Seconds before a 'sending' row is considered an orphaned lease and eligible for recovery."
+    )
 
     def get_allowed_recipients(self) -> set[str]:
         """Return normalized (lowercased, trimmed) set of allowed recipient email addresses."""

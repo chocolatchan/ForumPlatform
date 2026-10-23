@@ -103,7 +103,7 @@ class UpdateProfileRequest(BaseModel):
 
 class ChangeEmailRequest(BaseModel):
     new_email: str
-    password: str | None = None
+    password: str
 
 
 class ChangeEmailResendRequest(BaseModel):

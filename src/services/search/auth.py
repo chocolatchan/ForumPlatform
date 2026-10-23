@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, HTTPException, Request, status
 
+from src.common.internal_auth import verify_internal_service_request
 from src.services.search.config import search_settings
 from src.services.user.security import verify_csrf_token
 
@@ -150,21 +151,4 @@ async def verify_csrf_header(request: Request) -> None:
 
 async def verify_internal_service_key(request: Request) -> None:
     """Verify internal service-to-service key for internal endpoints."""
-    key = request.headers.get("X-Internal-Service-Key")
-    expected = search_settings.internal_service_secret
-    if key:
-        if key != expected:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Internal service key invalid.",
-            )
-        return
-
-    # In local testing or internal direct execution without Gateway, allow if environment is development/test
-    if search_settings.environment in ("development", "test"):
-        return
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Internal service key missing.",
-    )
+    verify_internal_service_request(request, search_settings)

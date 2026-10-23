@@ -26,6 +26,7 @@ import httpx
 from sqlalchemy import func, or_, select
 
 from src.common.database import DatabaseSessionManager
+from src.common.internal_auth import INTERNAL_SERVICE_KEY_HEADER
 from src.common.outbox import OutboxStatus
 
 logger = logging.getLogger("outbox_worker")
@@ -75,7 +76,7 @@ class OutboxWorker:
         db_manager: DatabaseSessionManager,
         model_class: Any,
         service_urls: dict[str, str],
-        internal_key: str = "default-internal-service-secret-key-32chars",
+        internal_key: str,
         batch_size: int = 20,
         poll_interval_seconds: float = 1.0,
         max_attempts: int = 5,
@@ -87,6 +88,8 @@ class OutboxWorker:
         self.db = db_manager
         self.model = model_class
         self.service_urls = service_urls
+        if not internal_key or not internal_key.strip():
+            raise ValueError("internal_key must be a non-empty internal service credential.")
         self.internal_key = internal_key
         self.batch_size = batch_size
         self.poll_interval = poll_interval_seconds
@@ -170,7 +173,7 @@ class OutboxWorker:
         self._http_client = httpx.AsyncClient(
             timeout=10.0,
             headers={
-                "X-Internal-Service-Key": self.internal_key,
+                INTERNAL_SERVICE_KEY_HEADER: self.internal_key,
                 "User-Agent": f"OutboxWorker/{self.service_name}",
             },
         )

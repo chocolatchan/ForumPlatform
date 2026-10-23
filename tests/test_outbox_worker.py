@@ -1,5 +1,6 @@
 """Unit and integration tests for the autonomous transactional OutboxWorker."""
 
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -15,6 +16,7 @@ from src.common.outbox import OutboxEventMixin, OutboxStatus
 from src.common.outbox_worker import OutboxWorker, calculate_backoff
 
 Base = declarative_base()
+TEST_INTERNAL_KEY = os.environ["INTERNAL_SERVICE_SECRET"]
 
 
 class SampleOutbox(Base, OutboxEventMixin):
@@ -83,6 +85,7 @@ async def test_outbox_worker_deliver_success(test_db):
             "search-service": "http://search-service:8006",
             "notification-service": "http://notification-service:8005",
         },
+        internal_key=TEST_INTERNAL_KEY,
         max_attempts=3,
         poll_interval_seconds=0.1,
     )
@@ -130,6 +133,7 @@ async def test_outbox_worker_retry_backoff_and_dead_letter(test_db):
         db_manager=test_db,
         model_class=SampleOutbox,
         service_urls={"notification-service": "http://notification-service:8005"},
+        internal_key=TEST_INTERNAL_KEY,
         max_attempts=2,
         base_backoff_seconds=0.5,
         poll_interval_seconds=0.1,
