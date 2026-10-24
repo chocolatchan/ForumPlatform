@@ -1,0 +1,29 @@
+services:
+  rehearsal-postgres:
+    image: postgres:16-alpine
+    container_name: forum_rehearsal_postgres_t031_2_16
+    restart: "no"
+    environment:
+      POSTGRES_USER: rehearsal_admin
+      POSTGRES_PASSWORD: rehearsal_secure_password_1122!
+      POSTGRES_DB: rehearsal_default
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - rehearsal_postgres_data_t031_2_16:/var/lib/postgresql/data
+    networks:
+      - rehearsal_network_t031_2_16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rehearsal_admin -d rehearsal_default"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+networks:
+  rehearsal_network_t031_2_16:
+    name: rehearsal_network_t031_2_16
+    driver: bridge
+
+volumes:
+  rehearsal_postgres_data_t031_2_16:
+    name: rehearsal_postgres_data_t031_2_16

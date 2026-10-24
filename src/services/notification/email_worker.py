@@ -5,7 +5,8 @@ Ensures at-least-once, resilient outbound delivery of queued domain event emails
 - Dispatches via SMTP or in-memory sink
 - Exponential backoff with randomized jitter
 - Max attempt threshold before moving to dead_letter status
-- Recipient allowlist enforcement (fail-closed in dev/test)
+- Environment routing and production recipient-domain suppression in the adapter
+- Suppressed messages move directly to dead_letter, never delivered
 - Graceful shutdown handling
 """
 
@@ -13,15 +14,18 @@ import asyncio
 import contextlib
 import logging
 import random
-import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from email.message import EmailMessage
 from typing import Any
 
 from sqlalchemy import or_, select
 
 from src.common.database import DatabaseSessionManager
+from src.common.email import (
+    EmailAdapterError,
+    EmailMessage,
+    get_notification_email_adapter,
+)
 from src.services.notification.config import notification_settings
 from src.services.notification.models import EmailDelivery
 
@@ -29,12 +33,19 @@ logger = logging.getLogger("notification_email_worker")
 
 
 class EmailWorkerDeliveryError(Exception):
-    """Raised when email delivery fails via SMTP or allowlist check."""
+    """Raised when email delivery fails via SMTP or recipient policy."""
 
-    def __init__(self, message: str, recipient: str, is_recipient_rejected: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        recipient: str,
+        is_recipient_rejected: bool = False,
+        is_suppressed: bool = False,
+    ) -> None:
         super().__init__(message)
         self.recipient = recipient
         self.is_recipient_rejected = is_recipient_rejected
+        self.is_suppressed = is_suppressed
 
 
 @dataclass(frozen=True)
@@ -86,90 +97,9 @@ class NotificationEmailSink:
 notification_email_sink = NotificationEmailSink()
 
 
-def _send_smtp_email_sync(
-    recipient: str,
-    subject: str,
-    body_text: str,
-    body_html: str | None,
-    from_addr: str,
-    host: str,
-    port: int,
-    user: str = "",
-    password: str = "",
-    use_tls: bool = False,
-    starttls: bool = False,
-) -> None:
-    """Synchronous SMTP email dispatch executed in an async executor thread."""
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = recipient
-    msg.set_content(body_text)
-
-    if body_html:
-        msg.add_alternative(body_html, subtype="html")
-
-    try:
-        if use_tls:
-            with smtplib.SMTP_SSL(host=host, port=port, timeout=10) as client:
-                if user and password:
-                    client.login(user, password)
-                refused = client.send_message(msg)
-                if refused:
-                    raise smtplib.SMTPRecipientsRefused(refused)
-        else:
-            with smtplib.SMTP(host=host, port=port, timeout=10) as client:
-                if starttls:
-                    client.starttls()
-                if user and password:
-                    client.login(user, password)
-                refused = client.send_message(msg)
-                if refused:
-                    raise smtplib.SMTPRecipientsRefused(refused)
-    except smtplib.SMTPRecipientsRefused as e:
-        logger.warning("SMTP recipient refused: recipient=%s", recipient)
-        raise EmailWorkerDeliveryError(
-            f"Recipient refused by SMTP server: {recipient}",
-            recipient=recipient,
-            is_recipient_rejected=True,
-        ) from e
-    except smtplib.SMTPResponseException as e:
-        logger.warning("SMTP server error: code=%s recipient=%s", e.smtp_code, recipient)
-        raise EmailWorkerDeliveryError(
-            f"SMTP error ({e.smtp_code}): {e.smtp_error}",
-            recipient=recipient,
-            is_recipient_rejected=(e.smtp_code == 550),
-        ) from e
-    except Exception as e:
-        logger.error(
-            "SMTP connection error to %s:%s for recipient=%s: %s",
-            host,
-            port,
-            recipient,
-            type(e).__name__,
-        )
-        raise EmailWorkerDeliveryError(
-            f"SMTP connection failed: {type(e).__name__}",
-            recipient=recipient,
-            is_recipient_rejected=False,
-        ) from e
-
-
 async def dispatch_single_email(delivery: EmailDelivery) -> None:
     """Send single email via configured backend (smtp or memory)."""
     recipient = delivery.recipient_email
-
-    # Enforce allowlist in dev/test/staging
-    if not notification_settings.is_recipient_allowed(recipient):
-        logger.warning(
-            "Email rejected: recipient '%s' is not in configured allowlist.",
-            recipient,
-        )
-        raise EmailWorkerDeliveryError(
-            f"Recipient '{recipient}' not permitted by allowlist.",
-            recipient=recipient,
-            is_recipient_rejected=True,
-        )
 
     backend = notification_settings.email_delivery_backend
     if backend == "memory":
@@ -184,22 +114,26 @@ async def dispatch_single_email(delivery: EmailDelivery) -> None:
         return
 
     if backend == "smtp":
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            _send_smtp_email_sync,
-            recipient,
-            delivery.subject,
-            delivery.body_text,
-            delivery.body_html,
-            notification_settings.email_from,
-            notification_settings.smtp_host,
-            notification_settings.smtp_port,
-            notification_settings.smtp_user,
-            notification_settings.smtp_password,
-            notification_settings.smtp_use_tls,
-            notification_settings.smtp_starttls,
-        )
+        try:
+            adapter = get_notification_email_adapter()
+            await adapter.send(
+                EmailMessage(
+                    subject=delivery.subject,
+                    body_text=delivery.body_text,
+                    sender=notification_settings.email_from,
+                    recipients=[recipient],
+                    body_html=delivery.body_html,
+                )
+            )
+        except EmailAdapterError as exc:
+            # Preserve the worker's established error type so process_batch can
+            # keep its retry vs. dead-letter decisions.
+            raise EmailWorkerDeliveryError(
+                str(exc),
+                recipient=exc.recipient or recipient,
+                is_recipient_rejected=exc.is_recipient_rejected,
+                is_suppressed=exc.is_suppressed,
+            ) from exc
         return
 
     raise ValueError(f"Unknown email delivery backend: '{backend}'")
@@ -390,14 +324,17 @@ class EmailDispatchWorker:
                 success = True
                 err_msg = None
                 rejected = False
+                suppressed = False
             except EmailWorkerDeliveryError as e:
                 success = False
                 err_msg = str(e)
                 rejected = e.is_recipient_rejected
+                suppressed = e.is_suppressed
             except Exception as e:
                 success = False
                 err_msg = f"{type(e).__name__}: {str(e)}"
                 rejected = False
+                suppressed = False
 
             # Update delivery status
             async with self.db.transaction() as session:
@@ -417,14 +354,23 @@ class EmailDispatchWorker:
                 else:
                     d_row.last_error = err_msg
                     d_row.sending_since = None
-                    if rejected or d_row.attempts >= d_row.max_attempts:
+                    if suppressed or rejected or d_row.attempts >= d_row.max_attempts:
                         d_row.status = "dead_letter"
-                        logger.error(
-                            "Email delivery %s moved to dead_letter: attempts=%d, error=%s",
-                            delivery_id,
-                            d_row.attempts,
-                            err_msg,
-                        )
+                        if suppressed:
+                            logger.warning(
+                                "Email delivery %s suppressed by recipient-domain policy; "
+                                "dead_letter attempts=%d recipients=%s",
+                                delivery_id,
+                                d_row.attempts,
+                                delivery.recipient_email,
+                            )
+                        else:
+                            logger.error(
+                                "Email delivery %s moved to dead_letter: attempts=%d, error=%s",
+                                delivery_id,
+                                d_row.attempts,
+                                err_msg,
+                            )
                     else:
                         d_row.status = "failed"
                         backoff = calculate_email_backoff(d_row.attempts)

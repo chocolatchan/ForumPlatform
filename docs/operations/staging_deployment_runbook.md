@@ -50,6 +50,49 @@ docker compose ps
 
 Wait until `forum_postgres` and `forum_redis` report `(healthy)`.
 
+### Email Configuration Contract (Mailpit)
+
+Development and test SMTP delivery uses the `mailpit` Compose service, not a
+host loopback address:
+
+| Setting | Value | Notes |
+|---|---|---|
+| `EMAIL_DELIVERY_BACKEND` | `smtp` | Use `memory` only for deterministic tests. |
+| `DEV_SMTP_HOST` | `mailpit` | Compose maps this to `SMTP_HOST`; `localhost` is rejected in development/test. |
+| `DEV_SMTP_PORT` | `1025` | Mailpit's internal SMTP listener. |
+| `DEV_SMTP_USER` / `DEV_SMTP_PASSWORD` | empty | Non-production Mailpit must not receive credentials. |
+| `DEV_SMTP_USE_TLS` / `DEV_SMTP_STARTTLS` | `false` | Mailpit development/test SMTP is plain text. |
+| `MAILPIT_UI_PORT` | `8025` | Host-published UI/API port, not the SMTP endpoint. |
+
+Recipient allowlists have been removed. Development/test delivers every
+application-generated message to Mailpit while preserving its original
+recipient metadata. Production uses a separate transport configuration,
+permits ordinary external domains, and suppresses the exact `test.dev` domain
+and its subdomains before SMTP transport.
+
+The same settings are supplied to the User and Notification services from the
+`x-email-environment` anchor in `docker-compose.yml`. Both services depend on a
+healthy `mailpit` container. The shared adapter validates the contract at
+initialization and does not fall back to another SMTP endpoint when Mailpit is
+unavailable.
+
+Validate the effective Compose configuration without starting or rebuilding
+containers:
+
+```bash
+docker compose config --quiet
+```
+
+Production is intentionally separate: Mailpit and loopback SMTP hosts are
+rejected in production, so production requires an explicitly configured external
+SMTP host and credentials. Do not reuse this Mailpit sample as production
+configuration.
+
+Development/test User and Notification containers also use the per-container
+outbound SMTP guard documented in
+`docs/operations/smtp_egress_guard_runbook.md`. The guard is skipped in
+staging/production.
+
 ### Step 3: Verify Migration State Read-Only
 
 **Target environment:** `staging`

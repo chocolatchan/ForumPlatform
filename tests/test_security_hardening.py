@@ -93,14 +93,9 @@ def reset_security_environment():
     rate_limiter_verify_otp.reset()
     rate_limiter_resend_otp.reset()
     orig_backend = user_settings.email_delivery_backend
-    orig_allowlist = user_settings.dev_email_allowlist
     user_settings.email_delivery_backend = "memory"
-    user_settings.dev_email_allowlist = (
-        "developer@example.test,tester@example.test,concurrent@example.test,concurrent_pwd@example.test"
-    )
     yield
     user_settings.email_delivery_backend = orig_backend
-    user_settings.dev_email_allowlist = orig_allowlist
     otp_delivery_sink.clear()
     rate_limiter_register.reset()
     rate_limiter_login.reset()

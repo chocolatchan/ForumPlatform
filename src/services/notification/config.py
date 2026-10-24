@@ -1,8 +1,11 @@
 """Notification Service configuration."""
 
-from pydantic import Field
+from typing import Self
+
+from pydantic import Field, model_validator
 
 from src.common.config import BaseServiceSettings
+from src.common.email.config import validate_email_configuration
 
 
 class NotificationSettings(BaseServiceSettings):
@@ -35,11 +38,7 @@ class NotificationSettings(BaseServiceSettings):
     email_from: str = Field(default="notifications@forumplatform.local")
     email_delivery_backend: str = Field(
         default="memory",
-        description="Delivery backend: 'smtp' for local SMTP catcher (Mailpit) or 'memory' for unit tests",
-    )
-    dev_email_allowlist: str = Field(
-        default="developer@example.test,tester@example.test",
-        description="Comma-separated list of allowed recipient email addresses. Empty means fail-closed.",
+        description="Delivery backend: 'smtp' for the shared transport or 'memory' for unit tests",
     )
 
     # Worker configuration
@@ -54,29 +53,21 @@ class NotificationSettings(BaseServiceSettings):
         description="Seconds before a 'sending' row is considered an orphaned lease and eligible for recovery."
     )
 
-    def get_allowed_recipients(self) -> set[str]:
-        """Return normalized (lowercased, trimmed) set of allowed recipient email addresses."""
-        if not self.dev_email_allowlist or not self.dev_email_allowlist.strip():
-            return set()
-        return {
-            part.strip().lower() for part in self.dev_email_allowlist.split(",") if part.strip()
-        }
-
-    def is_recipient_allowed(self, recipient: str) -> bool:
-        """Check whether recipient email matches configured allowlist rules."""
-        norm_recipient = recipient.strip().lower()
-        allowed = self.get_allowed_recipients()
-        if "*" in allowed:
-            return True
-        if norm_recipient in allowed:
-            return True
-        # Check wildcard domain patterns (e.g., *@example.test)
-        if "@" in norm_recipient:
-            domain = norm_recipient.split("@", 1)[1]
-            if f"*@{domain}" in allowed:
-                return True
-        return False
-
+    @model_validator(mode="after")
+    def validate_email_transport(self) -> "Self":
+        """Validate the shared email contract at service startup."""
+        validate_email_configuration(
+            environment=self.environment,
+            environment_explicit="environment" in self.model_fields_set,
+            backend=self.email_delivery_backend,
+            smtp_host=self.smtp_host,
+            smtp_port=self.smtp_port,
+            smtp_use_tls=self.smtp_use_tls,
+            smtp_starttls=self.smtp_starttls,
+            smtp_user=self.smtp_user,
+            smtp_password=self.smtp_password,
+        )
+        return self
 
 
 notification_settings = NotificationSettings()

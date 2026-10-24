@@ -2,7 +2,7 @@
 
 Coverage:
 1. EmailDispatchWorker.process_batch status transitions (pending→delivered, pending→failed→dead_letter).
-2. Allowlist enforcement: recipient not in allowlist → dead_letter without SMTP call.
+2. Shared-adapter routing: memory accepts every recipient; production suppression is dead-lettered.
 3. Exponential backoff calculation bounds and jitter.
 4. NotificationEmailSink (memory backend) records messages and supports filtering / clearing.
 5. Event handler queues EmailDelivery for mandatory_security category regardless of email_enabled pref.
@@ -11,9 +11,10 @@ Coverage:
 8. Integration smoke test: UserRegistered event → EmailDelivery row inserted with status='pending'.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -21,6 +22,7 @@ from sqlalchemy import select
 
 import src.services.notification.database as notif_db_module
 from src.common.database import DatabaseSessionManager
+from src.common.email import EmailAdapterError, EmailMessage, EmailSuppressedError
 from src.services.notification.email_worker import (
     EmailDispatchWorker,
     EmailWorkerDeliveryError,
@@ -81,6 +83,23 @@ async def reset_sink():
     notification_email_sink.clear()
     yield
     notification_email_sink.clear()
+
+
+@pytest.fixture
+def mocked_notification_adapter():
+    """Patch the shared-adapter factory and expose a mocked async adapter."""
+    adapter = MagicMock()
+    adapter.send = AsyncMock()
+    with patch(
+        "src.services.notification.email_worker.get_notification_email_adapter",
+        return_value=adapter,
+    ) as factory:
+        yield factory, adapter
+
+
+def _smtp_settings(mock_cfg: MagicMock) -> None:
+    mock_cfg.email_delivery_backend = "smtp"
+    mock_cfg.email_from = "notifications@forumplatform.local"
 
 
 def _make_delivery(
@@ -199,7 +218,6 @@ class TestDispatchSingleEmail:
         # Patch the settings object on the email_worker module (not the Pydantic instance attribute)
         with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
             mock_cfg.email_delivery_backend = "memory"
-            mock_cfg.is_recipient_allowed.return_value = True
             await dispatch_single_email(delivery)
 
         msgs = notification_email_sink.get_messages("tester@example.test")
@@ -207,18 +225,17 @@ class TestDispatchSingleEmail:
         assert msgs[0].subject == "Test Subject"
 
     @pytest.mark.asyncio
-    async def test_allowlist_rejection_raises_error(self):
-        """Recipient not in allowlist must raise EmailWorkerDeliveryError with is_recipient_rejected=True."""
+    async def test_memory_backend_accepts_any_recipient(self):
+        """No recipient allowlist exists; memory delivery preserves every recipient."""
         delivery = _make_delivery(recipient_email="stranger@evil.com")
 
         with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
             mock_cfg.email_delivery_backend = "memory"
-            mock_cfg.is_recipient_allowed.return_value = False
-            with pytest.raises(EmailWorkerDeliveryError) as exc_info:
-                await dispatch_single_email(delivery)
+            await dispatch_single_email(delivery)
 
-        assert exc_info.value.is_recipient_rejected is True
-        assert exc_info.value.recipient == "stranger@evil.com"
+        msgs = notification_email_sink.get_messages("stranger@evil.com")
+        assert len(msgs) == 1
+        assert msgs[0].recipient == "stranger@evil.com"
 
     @pytest.mark.asyncio
     async def test_unknown_backend_raises_value_error(self):
@@ -226,9 +243,112 @@ class TestDispatchSingleEmail:
 
         with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
             mock_cfg.email_delivery_backend = "invalid_backend"
-            mock_cfg.is_recipient_allowed.return_value = True
             with pytest.raises(ValueError, match="Unknown email delivery backend"):
                 await dispatch_single_email(delivery)
+
+    @pytest.mark.asyncio
+    async def test_smtp_backend_uses_shared_adapter_once(self, mocked_notification_adapter):
+        """SMTP dispatch must use the shared adapter once with unchanged content."""
+        delivery = _make_delivery(recipient_email="tester@example.test")
+        factory, adapter = mocked_notification_adapter
+
+        with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+            _smtp_settings(mock_cfg)
+            await dispatch_single_email(delivery)
+
+        assert factory.call_count == 1
+        assert adapter.send.await_count == 1
+        message = adapter.send.await_args.args[0]
+        assert isinstance(message, EmailMessage)
+        assert message.recipients == ["tester@example.test"]
+        assert message.sender == "notifications@forumplatform.local"
+        assert message.subject == delivery.subject
+        assert message.body_text == delivery.body_text
+        assert message.body_html == delivery.body_html
+        assert notification_email_sink.get_messages() == []
+
+    @pytest.mark.asyncio
+    async def test_smtp_timeout_maps_to_worker_error(self, mocked_notification_adapter):
+        """Adapter timeout must preserve retryable worker error semantics."""
+        delivery = _make_delivery(recipient_email="tester@example.test")
+        _, adapter = mocked_notification_adapter
+        adapter.send.side_effect = EmailAdapterError(
+            "SMTP connection failed: TimeoutError",
+            recipient="tester@example.test",
+            is_recipient_rejected=False,
+        )
+
+        with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+            _smtp_settings(mock_cfg)
+            with pytest.raises(EmailWorkerDeliveryError) as exc_info:
+                await dispatch_single_email(delivery)
+
+        assert exc_info.value.is_recipient_rejected is False
+        assert "TimeoutError" in str(exc_info.value)
+        assert notification_email_sink.get_messages() == []
+
+    @pytest.mark.asyncio
+    async def test_adapter_recipient_rejection_maps_to_dead_letter_flag(
+        self, mocked_notification_adapter
+    ):
+        """Adapter recipient rejection must preserve the immediate dead-letter flag."""
+        delivery = _make_delivery(recipient_email="tester@example.test")
+        _, adapter = mocked_notification_adapter
+        adapter.send.side_effect = EmailAdapterError(
+            "Recipient refused by SMTP server",
+            recipient="tester@example.test",
+            is_recipient_rejected=True,
+        )
+
+        with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+            _smtp_settings(mock_cfg)
+            with pytest.raises(EmailWorkerDeliveryError) as exc_info:
+                await dispatch_single_email(delivery)
+
+        assert exc_info.value.is_recipient_rejected is True
+
+    @pytest.mark.asyncio
+    async def test_adapter_suppression_maps_to_worker_error(self, mocked_notification_adapter):
+        """Production recipient-domain suppression preserves the suppression flag."""
+        delivery = _make_delivery(recipient_email="user@test.dev")
+        _, adapter = mocked_notification_adapter
+        adapter.send.side_effect = EmailSuppressedError(
+            recipients=("user@test.dev",),
+            domains=("test.dev",),
+        )
+
+        with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+            _smtp_settings(mock_cfg)
+            with pytest.raises(EmailWorkerDeliveryError) as exc_info:
+                await dispatch_single_email(delivery)
+
+        assert exc_info.value.is_suppressed is True
+        assert exc_info.value.is_recipient_rejected is False
+        assert exc_info.value.recipient == "user@test.dev"
+
+    @pytest.mark.asyncio
+    async def test_smtp_failure_does_not_log_rendered_body(
+        self, mocked_notification_adapter, caplog
+    ):
+        """Rendered notification body must not leak into delivery logs."""
+        delivery = _make_delivery(
+            recipient_email="tester@example.test",
+            category="mandatory_security",
+        )
+        delivery.body_text = "sensitive-body-marker"
+        _, adapter = mocked_notification_adapter
+        adapter.send.side_effect = EmailAdapterError(
+            "SMTP connection failed: TimeoutError",
+            recipient="tester@example.test",
+        )
+        caplog.set_level(logging.DEBUG)
+
+        with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+            _smtp_settings(mock_cfg)
+            with pytest.raises(EmailWorkerDeliveryError):
+                await dispatch_single_email(delivery)
+
+        assert "sensitive-body-marker" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +368,6 @@ async def test_process_batch_delivers_pending_email(notif_db):
 
     with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
             mock_cfg.email_delivery_backend = "memory"
-            mock_cfg.is_recipient_allowed.return_value = True
             processed = await worker.process_batch()
 
     assert processed >= 1
@@ -290,7 +409,7 @@ async def test_process_batch_marks_failed_on_delivery_error(notif_db):
 
 @pytest.mark.asyncio
 async def test_process_batch_dead_letter_on_recipient_rejected(notif_db):
-    """Allowlist rejection (is_recipient_rejected=True) must immediately move to dead_letter."""
+    """SMTP recipient rejection (is_recipient_rejected=True) must move to dead_letter."""
     delivery = _make_delivery(recipient_email="blocked@evil.com", status="pending", max_attempts=5)
 
     async with notif_db.transaction() as session:
@@ -301,7 +420,11 @@ async def test_process_batch_dead_letter_on_recipient_rejected(notif_db):
     with patch(
         "src.services.notification.email_worker.dispatch_single_email",
         new_callable=AsyncMock,
-        side_effect=EmailWorkerDeliveryError("Allowlist rejected", recipient="blocked@evil.com", is_recipient_rejected=True),
+        side_effect=EmailWorkerDeliveryError(
+            "Recipient refused by SMTP server",
+            recipient="blocked@evil.com",
+            is_recipient_rejected=True,
+        ),
     ):
         await worker.process_batch()
 
@@ -309,6 +432,37 @@ async def test_process_batch_dead_letter_on_recipient_rejected(notif_db):
         row = (await session.execute(select(EmailDelivery).where(EmailDelivery.id == delivery.id))).scalar_one()
         assert row.status == "dead_letter"
         assert row.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_process_batch_marks_suppressed_as_dead_letter_not_delivered(notif_db):
+    """Suppressed production mail must never transition to delivered or retry."""
+    delivery = _make_delivery(
+        recipient_email="user@sub.test.dev", status="pending", max_attempts=5
+    )
+
+    async with notif_db.transaction() as session:
+        session.add(delivery)
+
+    worker = EmailDispatchWorker(db_manager=notif_db, poll_interval=999, batch_size=10)
+
+    with patch(
+        "src.services.notification.email_worker.dispatch_single_email",
+        new_callable=AsyncMock,
+        side_effect=EmailWorkerDeliveryError(
+            "Email suppressed by production recipient-domain policy",
+            recipient="user@sub.test.dev",
+            is_suppressed=True,
+        ),
+    ):
+        await worker.process_batch()
+
+    async with notif_db.session() as session:
+        row = (await session.execute(select(EmailDelivery).where(EmailDelivery.id == delivery.id))).scalar_one()
+        assert row.status == "dead_letter"
+        assert row.attempts == 1
+        assert row.delivered_at is None
+        assert "suppressed" in (row.last_error or "").lower()
 
 
 @pytest.mark.asyncio
@@ -356,7 +510,6 @@ async def test_process_batch_skips_future_next_attempt_at(notif_db):
 
     with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
         mock_cfg.email_delivery_backend = "memory"
-        mock_cfg.is_recipient_allowed.return_value = True
         await worker.process_batch()
 
     # Should not process this specific delivery (though it may process earlier ones)
@@ -382,6 +535,109 @@ async def test_process_batch_returns_zero_when_empty(notif_db):
         result = await worker.process_batch()
 
     assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_process_batch_uses_adapter_once_and_marks_delivered(
+    notif_db, mocked_notification_adapter
+):
+    """A claimed row must dispatch once through the adapter and only then be delivered."""
+    delivery = _make_delivery(recipient_email="tester@example.test", status="pending")
+    async with notif_db.transaction() as session:
+        session.add(delivery)
+
+    _, adapter = mocked_notification_adapter
+    worker = EmailDispatchWorker(db_manager=notif_db, poll_interval=999, batch_size=10)
+
+    with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+        _smtp_settings(mock_cfg)
+        processed = await worker.process_batch()
+        second_processed = await worker.process_batch()
+
+    assert processed >= 1
+    assert second_processed == 0
+    assert adapter.send.await_count == 1
+
+    async with notif_db.session() as session:
+        row = (
+            await session.execute(select(EmailDelivery).where(EmailDelivery.id == delivery.id))
+        ).scalar_one()
+    assert row.status == "delivered"
+    assert row.attempts == 1
+    assert row.delivered_at is not None
+    assert row.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_process_batch_adapter_timeout_schedules_retry(
+    notif_db, mocked_notification_adapter
+):
+    """Adapter timeout must leave the row failed with a future retry, never delivered."""
+    delivery = _make_delivery(
+        recipient_email="tester@example.test",
+        status="pending",
+        attempts=0,
+        max_attempts=5,
+    )
+    async with notif_db.transaction() as session:
+        session.add(delivery)
+
+    _, adapter = mocked_notification_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "SMTP connection failed: TimeoutError",
+        recipient="tester@example.test",
+        is_recipient_rejected=False,
+    )
+    worker = EmailDispatchWorker(db_manager=notif_db, poll_interval=999, batch_size=10)
+
+    with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+        _smtp_settings(mock_cfg)
+        await worker.process_batch()
+
+    async with notif_db.session() as session:
+        row = (
+            await session.execute(select(EmailDelivery).where(EmailDelivery.id == delivery.id))
+        ).scalar_one()
+    assert row.status == "failed"
+    assert row.attempts == 1
+    assert row.delivered_at is None
+    assert "TimeoutError" in (row.last_error or "")
+    next_at = row.next_attempt_at.replace(tzinfo=None) if row.next_attempt_at.tzinfo else row.next_attempt_at
+    assert next_at > datetime.now(UTC).replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_process_batch_adapter_rejection_dead_letters(
+    notif_db, mocked_notification_adapter
+):
+    """Adapter recipient rejection must map to immediate dead-letter status."""
+    delivery = _make_delivery(
+        recipient_email="tester@example.test",
+        status="pending",
+        max_attempts=5,
+    )
+    async with notif_db.transaction() as session:
+        session.add(delivery)
+
+    _, adapter = mocked_notification_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "Recipient refused by SMTP server",
+        recipient="tester@example.test",
+        is_recipient_rejected=True,
+    )
+    worker = EmailDispatchWorker(db_manager=notif_db, poll_interval=999, batch_size=10)
+
+    with patch("src.services.notification.email_worker.notification_settings") as mock_cfg:
+        _smtp_settings(mock_cfg)
+        await worker.process_batch()
+
+    async with notif_db.session() as session:
+        row = (
+            await session.execute(select(EmailDelivery).where(EmailDelivery.id == delivery.id))
+        ).scalar_one()
+    assert row.status == "dead_letter"
+    assert row.attempts == 1
+    assert row.delivered_at is None
 
 
 # ---------------------------------------------------------------------------

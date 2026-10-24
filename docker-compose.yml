@@ -1,3 +1,20 @@
+x-email-environment: &email-environment
+  # This Compose stack is the development/test/staging Mailpit transport.
+  # Production must use a separate deployment configuration with its own SMTP_*
+  # secrets. The development stack deliberately cannot consume production host
+  # or credential variables.
+  EMAIL_DELIVERY_BACKEND: ${EMAIL_DELIVERY_BACKEND:-smtp}
+  SMTP_HOST: ${DEV_SMTP_HOST:-mailpit}
+  SMTP_PORT: ${DEV_SMTP_PORT:-1025}
+  SMTP_USER: ${DEV_SMTP_USER:-}
+  SMTP_PASSWORD: ${DEV_SMTP_PASSWORD:-}
+  SMTP_USE_TLS: ${DEV_SMTP_USE_TLS:-false}
+  SMTP_STARTTLS: ${DEV_SMTP_STARTTLS:-false}
+  EMAIL_FROM: ${EMAIL_FROM:-noreply@forumplatform.local}
+  SMTP_GUARD_ALLOWED_HOST: ${SMTP_GUARD_ALLOWED_HOST:-mailpit}
+  SMTP_GUARD_ALLOWED_PORT: ${SMTP_GUARD_ALLOWED_PORT:-1025}
+  SMTP_GUARD_PORTS: ${SMTP_GUARD_PORTS:-25 465 587 1025 2525}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -43,7 +60,8 @@ services:
     environment:
       MP_SMTP_BIND_ADDR: 0.0.0.0:1025
       MP_UI_BIND_ADDR: 0.0.0.0:8025
-      MP_SMTP_ALLOWED_RECIPIENTS: ${MAILPIT_ALLOWED_RECIPIENTS:-^(developer@example\.test|tester@example\.test)$}
+      # No recipient filter: development/test application email for every
+      # application recipient is routed here and preserved as Mailpit metadata.
     ports:
       - "${MAILPIT_UI_PORT:-8025}:8025"
     healthcheck:
@@ -61,6 +79,9 @@ services:
     container_name: forum_user_service
     restart: unless-stopped
     command: ["uvicorn", "src.services.user.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    entrypoint: ["/app/scripts/network/smtp_egress_guard.sh"]
+    cap_add:
+      - NET_ADMIN
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_users
       DATABASE_USERS_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_users
@@ -71,11 +92,7 @@ services:
       DATABASE_SEARCH_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_search
       REDIS_URL: redis://redis:6379/0
       PORT: 8001
-      EMAIL_DELIVERY_BACKEND: smtp
-      SMTP_HOST: mailpit
-      SMTP_PORT: 1025
-      EMAIL_FROM: ${EMAIL_FROM:-noreply@forumplatform.local}
-      DEV_EMAIL_ALLOWLIST: ${DEV_EMAIL_ALLOWLIST:-developer@example.test,tester@example.test}
+      <<: *email-environment
       USER_SERVICE_URL: http://user-service:8001
       CONTENT_SERVICE_URL: http://content-service:8002
       INTERACTION_SERVICE_URL: http://interaction-service:8003
@@ -208,6 +225,9 @@ services:
     container_name: forum_notification_service
     restart: unless-stopped
     command: ["uvicorn", "src.services.notification.app:app", "--host", "0.0.0.0", "--port", "8005"]
+    entrypoint: ["/app/scripts/network/smtp_egress_guard.sh"]
+    cap_add:
+      - NET_ADMIN
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forum_admin}:${POSTGRES_PASSWORD:-forum_dev_password}@postgres:5432/forum_notifications
       REDIS_URL: redis://redis:6379/0
@@ -221,13 +241,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       INTERNAL_SERVICE_SECRET: "${INTERNAL_SERVICE_SECRET:?INTERNAL_SERVICE_SECRET must be set}"
       INTERNAL_SERVICE_AUTH_BYPASS: ${INTERNAL_SERVICE_AUTH_BYPASS:-false}
-      EMAIL_DELIVERY_BACKEND: ${EMAIL_DELIVERY_BACKEND:-smtp}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      EMAIL_FROM: ${EMAIL_FROM:-noreply@forumplatform.local}
-      DEV_EMAIL_ALLOWLIST: ${DEV_EMAIL_ALLOWLIST:-developer@example.test,tester@example.test}
+      <<: *email-environment
       EMAIL_WORKER_LEASE_TIMEOUT_SECONDS: ${EMAIL_WORKER_LEASE_TIMEOUT_SECONDS:-300}
     ports:
       - "8005:8005"

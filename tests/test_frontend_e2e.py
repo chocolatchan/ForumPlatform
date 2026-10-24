@@ -144,15 +144,7 @@ async def setup_frontend_test_environment() -> AsyncGenerator[None, None]:
     mock_content_client = AsyncClient(transport=content_transport, base_url="http://localhost:8002")
     moderation_app_mod.set_content_http_client(mock_content_client)
 
-    # Save and configure allowlist for test suite
-    from src.services.user.config import user_settings
-
-    orig_allowlist = user_settings.dev_email_allowlist
-    user_settings.dev_email_allowlist = "developer@example.test,tester@example.test,*@example.test"
-
     yield
-
-    user_settings.dev_email_allowlist = orig_allowlist
 
     await mock_user_client.aclose()
     await mock_content_client.aclose()

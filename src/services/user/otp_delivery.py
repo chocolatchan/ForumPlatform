@@ -1,35 +1,38 @@
-"""Development OTP delivery mailbox, SMTP delivery client, and notification sink.
+"""OTP delivery mailbox, shared-adapter client, and testing sink.
 
-Requirements per FR-2 and Task 006.5:
+Requirements per FR-2, Task 006.5, and Task 031.3.H:
 - Delivery abstraction suitable for development and integration testing.
-- SMTP catcher integration (Mailpit) in Docker Compose.
-- Strict recipient allowlist enforcement:
-  - Empty or unconfigured allowlist must fail-closed (reject all deliveries).
-  - Unlisted or partially matched addresses must fail delivery explicitly.
+- Development/test SMTP delivery is routed only to Mailpit by the shared adapter.
+- Production recipient suppression is enforced by the shared adapter before SMTP.
 - Safe failure handling: failed delivery must not leave a usable pending OTP in the database.
 - Anti-enumeration: Public API returns neutral 202 Accepted.
 - Never log plaintext OTPs or email bodies.
 """
 
-import asyncio
 import logging
-import smtplib
 from dataclasses import dataclass
 from datetime import datetime
-from email.message import EmailMessage
 
+from src.common.email import EmailAdapterError, EmailMessage, get_user_email_adapter
 from src.services.user.config import user_settings
 
 logger = logging.getLogger(__name__)
 
 
 class EmailDeliveryError(Exception):
-    """Raised when email delivery fails via SMTP or allowlist check."""
+    """Raised when email delivery fails via SMTP or recipient policy."""
 
-    def __init__(self, message: str, recipient: str, is_recipient_rejected: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        recipient: str,
+        is_recipient_rejected: bool = False,
+        is_suppressed: bool = False,
+    ) -> None:
         super().__init__(message)
         self.recipient = recipient
         self.is_recipient_rejected = is_recipient_rejected
+        self.is_suppressed = is_suppressed
 
 
 @dataclass(frozen=True)
@@ -70,82 +73,6 @@ class OtpDeliverySink:
 otp_delivery_sink = OtpDeliverySink()
 
 
-def _send_smtp_email_sync(
-    recipient: str,
-    subject: str,
-    body: str,
-    from_addr: str,
-    host: str,
-    port: int,
-    user: str = "",
-    password: str = "",
-    use_tls: bool = False,
-    starttls: bool = False,
-) -> None:
-    """Synchronous SMTP email sending execution run inside an async executor.
-
-    Supports plain SMTP, direct SSL/TLS, and STARTTLS.
-    Strictly avoids logging plaintext code or message body.
-    """
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = recipient
-    msg.set_content(body)
-
-    try:
-        if use_tls:
-            with smtplib.SMTP_SSL(host=host, port=port, timeout=10) as client:
-                if user and password:
-                    client.login(user, password)
-                refused = client.send_message(msg)
-                if refused:
-                    raise smtplib.SMTPRecipientsRefused(refused)
-        else:
-            with smtplib.SMTP(host=host, port=port, timeout=10) as client:
-                if starttls:
-                    client.starttls()
-                if user and password:
-                    client.login(user, password)
-                refused = client.send_message(msg)
-                if refused:
-                    raise smtplib.SMTPRecipientsRefused(refused)
-    except smtplib.SMTPRecipientsRefused as e:
-        logger.warning(
-            "SMTP recipient refused by mail server: recipient=%s",
-            recipient,
-        )
-        raise EmailDeliveryError(
-            f"Recipient refused by SMTP server: {recipient}",
-            recipient=recipient,
-            is_recipient_rejected=True,
-        ) from e
-    except smtplib.SMTPResponseException as e:
-        logger.warning(
-            "SMTP server returned error: code=%s recipient=%s",
-            e.smtp_code,
-            recipient,
-        )
-        raise EmailDeliveryError(
-            f"SMTP error ({e.smtp_code}): {e.smtp_error}",
-            recipient=recipient,
-            is_recipient_rejected=(e.smtp_code == 550),
-        ) from e
-    except Exception as e:
-        logger.error(
-            "SMTP delivery connection error to %s:%s for recipient=%s: %s",
-            host,
-            port,
-            recipient,
-            type(e).__name__,
-        )
-        raise EmailDeliveryError(
-            f"SMTP connection failed: {type(e).__name__}",
-            recipient=recipient,
-            is_recipient_rejected=False,
-        ) from e
-
-
 async def deliver_otp(
     recipient: str,
     code: str,
@@ -156,25 +83,13 @@ async def deliver_otp(
 
     Backend options:
     - 'memory': Delivers directly to `otp_delivery_sink` for fast unit tests.
-    - 'smtp': Enforces recipient allowlist (fail-closed) and sends to SMTP catcher.
+    - 'smtp': Sends through the shared adapter, which owns environment routing
+      and production recipient-domain suppression.
 
     Raises:
-        EmailDeliveryError: If allowlist check fails or SMTP server rejects/fails.
+        EmailDeliveryError: If the shared adapter rejects, suppresses, or fails.
     """
     recipient_clean = recipient.strip().lower()
-
-    # Pre-flight check: Developer recipient allowlist (fail-closed)
-    if not user_settings.is_recipient_allowed(recipient_clean):
-        logger.warning(
-            "Email delivery rejected by allowlist: recipient=%s (allowed count=%d)",
-            recipient_clean,
-            len(user_settings.get_allowed_recipients()),
-        )
-        raise EmailDeliveryError(
-            f"Recipient '{recipient_clean}' is not in the configured development email allowlist.",
-            recipient=recipient_clean,
-            is_recipient_rejected=True,
-        )
 
     # In memory mode (used by unit tests)
     if user_settings.email_delivery_backend == "memory":
@@ -196,19 +111,24 @@ async def deliver_otp(
         f"--\nForum Platform Team\n"
     )
 
-    await asyncio.to_thread(
-        _send_smtp_email_sync,
-        recipient=recipient_clean,
-        subject=subject,
-        body=body,
-        from_addr=user_settings.email_from,
-        host=user_settings.smtp_host,
-        port=user_settings.smtp_port,
-        user=user_settings.smtp_user,
-        password=user_settings.smtp_password,
-        use_tls=user_settings.smtp_use_tls,
-        starttls=user_settings.smtp_starttls,
-    )
+    try:
+        adapter = get_user_email_adapter()
+        await adapter.send(
+            EmailMessage(
+                subject=subject,
+                body_text=body,
+                sender=user_settings.email_from,
+                recipients=[recipient_clean],
+            )
+        )
+    except EmailAdapterError as exc:
+        # Preserve the User service's existing public error type and flags.
+        raise EmailDeliveryError(
+            str(exc),
+            recipient=exc.recipient or recipient_clean,
+            is_recipient_rejected=exc.is_recipient_rejected,
+            is_suppressed=exc.is_suppressed,
+        ) from exc
 
     # Also record to sink for inspection if needed
     otp_delivery_sink.deliver(

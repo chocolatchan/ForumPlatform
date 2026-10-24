@@ -5,6 +5,8 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    iptables \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pyproject.toml and install Python packages

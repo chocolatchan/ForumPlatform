@@ -3,6 +3,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from src.common.config import BaseServiceSettings
+from src.common.email.config import validate_email_configuration
 
 
 class UserSettings(BaseServiceSettings):
@@ -65,35 +66,8 @@ class UserSettings(BaseServiceSettings):
     email_from: str = Field(default="noreply@forumplatform.local")
     email_delivery_backend: str = Field(
         default="memory",
-        description="Delivery backend: 'smtp' for local SMTP catcher (Mailpit) or 'memory' for unit tests",
+        description="Delivery backend: 'smtp' for the shared transport or 'memory' for unit tests",
     )
-    dev_email_allowlist: str = Field(
-        default="developer@example.test,tester@example.test",
-        description="Comma-separated list of allowed recipient email addresses. Empty means fail-closed.",
-    )
-
-    def get_allowed_recipients(self) -> set[str]:
-        """Return normalized (lowercased, trimmed) set of allowed recipient email addresses."""
-        if not self.dev_email_allowlist or not self.dev_email_allowlist.strip():
-            return set()
-        return {
-            part.strip().lower() for part in self.dev_email_allowlist.split(",") if part.strip()
-        }
-
-    def is_recipient_allowed(self, recipient: str) -> bool:
-        """Check whether recipient email matches configured allowlist rules."""
-        norm_recipient = recipient.strip().lower()
-        allowed = self.get_allowed_recipients()
-        if "*" in allowed:
-            return True
-        if norm_recipient in allowed:
-            return True
-        # Check wildcard domain patterns (e.g., *@example.test)
-        if "@" in norm_recipient:
-            domain = norm_recipient.split("@", 1)[1]
-            if f"*@{domain}" in allowed:
-                return True
-        return False
 
     def is_cookie_secure(self) -> bool:
         """Determine whether session cookies must be marked with Secure attribute.
@@ -134,13 +108,17 @@ class UserSettings(BaseServiceSettings):
                 raise ValueError(
                     "Production requires a non-default, cryptographically secure CSRF_SECRET of at least 32 characters."
                 )
-            if self.email_delivery_backend == "smtp" and self.smtp_host in (
-                "localhost",
-                "127.0.0.1",
-                "mailpit",
-            ):
-                # Warning or notice in production if pointing to local mailpit
-                pass
+        validate_email_configuration(
+            environment=self.environment,
+            environment_explicit="environment" in self.model_fields_set,
+            backend=self.email_delivery_backend,
+            smtp_host=self.smtp_host,
+            smtp_port=self.smtp_port,
+            smtp_use_tls=self.smtp_use_tls,
+            smtp_starttls=self.smtp_starttls,
+            smtp_user=self.smtp_user,
+            smtp_password=self.smtp_password,
+        )
         return self
 
 

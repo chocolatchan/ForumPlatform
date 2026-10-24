@@ -1,34 +1,18 @@
-"""Automated Test Suite for Task 006.5: Dockerized SMTP Email Catcher with Recipient Allowlist.
+"""User Service OTP delivery, routing, and safe-failure tests.
 
 Coverage:
-1. Allowlist Parsing and Fail-Closed Verification:
-   - Empty or unconfigured allowlist permits nobody (fail-closed).
-   - Valid allowlist parses case-insensitively and strips whitespace.
-   - Disallowed recipients are rejected immediately.
-   - Partial / substring recipient matches are rejected (e.g. developer@example.test.bad).
-
-2. SMTP Client & Boundary Error Handling:
-   - Successful delivery via SMTP (mocked server returning 250 OK).
-   - Recipient rejection (SMTP 550) raises EmailDeliveryError with is_recipient_rejected=True.
-   - Server error / connection failure raises EmailDeliveryError.
-
-3. Registration & Resend Flow Integration:
-   - When recipient is allowed and SMTP delivers successfully, pending challenge is created with status 'pending'.
-   - When recipient is rejected or SMTP fails:
-     - Public API returns neutral 202 Accepted (anti-enumeration DEC-001).
-     - Database pending record is transitioned to 'delivery_failed' so it cannot be verified.
-     - Attempting to verify the un-emailed OTP returns 400 Bad Request.
-   - Plaintext OTP is never leaked in log output or API response.
-
-4. Resend OTP with Email Delivery:
-   - Resend flow delivers OTP via configured delivery backend.
-   - Resend to disallowed recipient transitions pending status to 'delivery_failed'.
+1. Shared-adapter execution and error boundaries.
+2. Registration/resend workflows without recipient allowlist authorization.
+3. Neutral anti-enumeration responses and non-delivered OTP state on failure.
+4. Production suppression maps to User delivery failure, never success.
+5. Sensitive OTP/body values never leak into delivery logs.
 """
 
+import logging
 import os
 import shutil
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -38,13 +22,13 @@ from sqlalchemy import select
 import src.services.user.app as user_app_mod
 import src.services.user.database as user_db_module
 from src.common.database import DatabaseSessionManager
+from src.common.email import EmailAdapterError, EmailMessage, EmailSuppressedError
 from src.services.user.app import app as user_app
-from src.services.user.config import UserSettings, user_settings
+from src.services.user.config import user_settings
 from src.services.user.models import Base as UserBase
 from src.services.user.models import PendingRegistration
 from src.services.user.otp_delivery import (
     EmailDeliveryError,
-    _send_smtp_email_sync,
     deliver_otp,
     otp_delivery_sink,
 )
@@ -83,94 +67,55 @@ def reset_delivery_environment():
     """Reset configuration and mailbox before and after each test."""
     otp_delivery_sink.clear()
     orig_backend = user_settings.email_delivery_backend
-    orig_allowlist = user_settings.dev_email_allowlist
     orig_host = user_settings.smtp_host
     orig_port = user_settings.smtp_port
     user_settings.email_delivery_backend = "smtp"
-    user_settings.dev_email_allowlist = "developer@example.test,tester@example.test"
     yield
     user_settings.email_delivery_backend = orig_backend
-    user_settings.dev_email_allowlist = orig_allowlist
     user_settings.smtp_host = orig_host
     user_settings.smtp_port = orig_port
     otp_delivery_sink.clear()
 
 
+@pytest.fixture
+def mocked_user_adapter():
+    """Patch the shared-adapter factory and expose a mocked async adapter."""
+    adapter = MagicMock()
+    adapter.send = AsyncMock()
+    with patch(
+        "src.services.user.otp_delivery.get_user_email_adapter",
+        return_value=adapter,
+    ) as factory:
+        yield factory, adapter
+
+
 # ==============================================================================
-# SECTION 1: ALLOWLIST & FAIL-CLOSED VERIFICATION
+# SECTION 1: SHARED ADAPTER EXECUTION & ERROR BOUNDARIES
 # ==============================================================================
-
-
-def test_allowlist_parsing_and_normalization():
-    """Verify comma-separated email list is parsed, lowercased, and trimmed."""
-    settings = UserSettings(
-        dev_email_allowlist="  Developer@Example.TEST , tester@example.test  ,, OTHER@TEST.DEV "
-    )
-    allowed = settings.get_allowed_recipients()
-    assert allowed == {
-        "developer@example.test",
-        "tester@example.test",
-        "other@test.dev",
-    }
-
-
-def test_allowlist_fail_closed_when_empty():
-    """Verify empty or whitespace-only allowlist allows nobody (fail-closed)."""
-    settings_empty = UserSettings(dev_email_allowlist="")
-    assert settings_empty.get_allowed_recipients() == set()
-
-    settings_spaces = UserSettings(dev_email_allowlist="   ,   , ")
-    assert settings_spaces.get_allowed_recipients() == set()
 
 
 @pytest.mark.asyncio
-async def test_deliver_otp_rejects_unlisted_recipient_fail_closed():
-    """Verify deliver_otp raises EmailDeliveryError if recipient is not in allowlist."""
-    user_settings.dev_email_allowlist = "developer@example.test"
+async def test_deliver_otp_sends_external_recipient_without_allowlist(mocked_user_adapter):
+    """Every recipient is accepted; environment routing belongs to the adapter."""
+    factory, adapter = mocked_user_adapter
 
-    # Exact match allowed
-    with patch("src.services.user.otp_delivery._send_smtp_email_sync") as mock_send:
+    for recipient in ("intruder@example.com", "user@test.dev", "user@not-test.dev"):
         await deliver_otp(
-            recipient="developer@example.test",
+            recipient=recipient,
             code="123456",
             purpose="registration",
             timestamp=datetime.now(UTC),
         )
-        assert mock_send.call_count == 1
 
-    # Unlisted recipient fails closed
-    with pytest.raises(EmailDeliveryError) as exc_info:
-        await deliver_otp(
-            recipient="intruder@example.com",
-            code="123456",
-            purpose="registration",
-            timestamp=datetime.now(UTC),
-        )
-    assert exc_info.value.is_recipient_rejected is True
-    assert "intruder@example.com" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_deliver_otp_rejects_partial_or_substring_match():
-    """Verify partial matches (substring or prefix/suffix) fail delivery."""
-    user_settings.dev_email_allowlist = "developer@example.test"
-
-    invalid_recipients = [
-        "developer@example.test.bad",
-        "baddeveloper@example.test",
-        "developer@example",
-        "developer@example.test.net",
+    assert factory.call_count == 3
+    assert adapter.send.await_count == 3
+    sent_recipients = [call.args[0].recipients for call in adapter.send.await_args_list]
+    assert sent_recipients == [
+        ["intruder@example.com"],
+        ["user@test.dev"],
+        ["user@not-test.dev"],
     ]
-
-    for bad_recipient in invalid_recipients:
-        with pytest.raises(EmailDeliveryError) as exc_info:
-            await deliver_otp(
-                recipient=bad_recipient,
-                code="654321",
-                purpose="registration",
-                timestamp=datetime.now(UTC),
-            )
-        assert exc_info.value.is_recipient_rejected is True
+    assert otp_delivery_sink.get_latest_otp("intruder@example.com") == "123456"
 
 
 # ==============================================================================
@@ -178,65 +123,116 @@ async def test_deliver_otp_rejects_partial_or_substring_match():
 # ==============================================================================
 
 
-def test_smtp_send_success():
-    """Verify _send_smtp_email_sync successfully creates SMTP session and sends message."""
-    mock_smtp = MagicMock()
-    mock_smtp.__enter__.return_value = mock_smtp
-    mock_smtp.send_message.return_value = {}  # Empty dict means all recipients accepted
+@pytest.mark.asyncio
+async def test_deliver_otp_uses_shared_adapter_once(mocked_user_adapter):
+    """Verify OTP delivery uses the shared adapter exactly once with unchanged content."""
+    factory, adapter = mocked_user_adapter
 
-    with patch("smtplib.SMTP", return_value=mock_smtp):
-        _send_smtp_email_sync(
+    await deliver_otp(
+        recipient="Developer@Example.TEST",
+        code="123456",
+        purpose="registration",
+        timestamp=datetime.now(UTC),
+    )
+
+    assert factory.call_count == 1
+    assert adapter.send.await_count == 1
+    sent_message = adapter.send.await_args.args[0]
+    assert isinstance(sent_message, EmailMessage)
+    assert sent_message.recipients == ["developer@example.test"]
+    assert sent_message.sender == user_settings.email_from
+    assert sent_message.subject == "Your Forum Verification Code [Registration]"
+    assert "123456" in sent_message.body_text
+    assert otp_delivery_sink.get_latest_otp("developer@example.test") == "123456"
+
+
+@pytest.mark.asyncio
+async def test_deliver_otp_maps_adapter_timeout_without_sink_write(mocked_user_adapter):
+    """Adapter timeout must surface as EmailDeliveryError and not look delivered."""
+    _, adapter = mocked_user_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "SMTP connection failed: TimeoutError",
+        recipient="developer@example.test",
+        is_recipient_rejected=False,
+    )
+
+    with pytest.raises(EmailDeliveryError) as exc_info:
+        await deliver_otp(
             recipient="developer@example.test",
-            subject="Test Subject",
-            body="Test Body",
-            from_addr="noreply@forumplatform.local",
-            host="mailpit",
-            port=1025,
+            code="654321",
+            purpose="recovery",
+            timestamp=datetime.now(UTC),
         )
 
-        assert mock_smtp.send_message.call_count == 1
-        sent_msg = mock_smtp.send_message.call_args[0][0]
-        assert sent_msg["To"] == "developer@example.test"
-        assert sent_msg["From"] == "noreply@forumplatform.local"
-        assert sent_msg["Subject"] == "Test Subject"
-        assert "Test Body" in sent_msg.get_content()
+    assert exc_info.value.is_recipient_rejected is False
+    assert "TimeoutError" in str(exc_info.value)
+    assert otp_delivery_sink.get_latest_otp("developer@example.test") is None
 
 
-def test_smtp_recipient_refused_error():
-    """Verify SMTPRecipientsRefused is converted into EmailDeliveryError."""
+@pytest.mark.asyncio
+async def test_deliver_otp_maps_adapter_recipient_rejection(mocked_user_adapter):
+    """Adapter recipient rejection must preserve the rejected flag."""
+    _, adapter = mocked_user_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "Recipient refused by SMTP server",
+        recipient="developer@example.test",
+        is_recipient_rejected=True,
+    )
 
-    mock_smtp = MagicMock()
-    mock_smtp.__enter__.return_value = mock_smtp
-    mock_smtp.send_message.return_value = {
-        "disallowed@example.test": (550, b"Requested action not taken: mailbox unavailable")
-    }
+    with pytest.raises(EmailDeliveryError) as exc_info:
+        await deliver_otp(
+            recipient="developer@example.test",
+            code="111111",
+            purpose="email_change",
+            timestamp=datetime.now(UTC),
+        )
 
-    with patch("smtplib.SMTP", return_value=mock_smtp):
-        with pytest.raises(EmailDeliveryError) as exc_info:
-            _send_smtp_email_sync(
-                recipient="disallowed@example.test",
-                subject="Test",
-                body="Test",
-                from_addr="noreply@forumplatform.local",
-                host="mailpit",
-                port=1025,
-            )
-        assert exc_info.value.is_recipient_rejected is True
+    assert exc_info.value.is_recipient_rejected is True
+    assert otp_delivery_sink.get_latest_otp("developer@example.test") is None
 
 
-def test_smtp_connection_refused_error():
-    """Verify socket connection error is converted into EmailDeliveryError without crashing."""
-    with patch("smtplib.SMTP", side_effect=ConnectionRefusedError("Connection refused")):
-        with pytest.raises(EmailDeliveryError) as exc_info:
-            _send_smtp_email_sync(
-                recipient="developer@example.test",
-                subject="Test",
-                body="Test",
-                from_addr="noreply@forumplatform.local",
-                host="mailpit",
-                port=1025,
-            )
-        assert exc_info.value.is_recipient_rejected is False
+@pytest.mark.asyncio
+async def test_deliver_otp_maps_production_suppression_without_sink_write(mocked_user_adapter):
+    """A suppressed production recipient must never be recorded as delivered."""
+    _, adapter = mocked_user_adapter
+    adapter.send.side_effect = EmailSuppressedError(
+        recipients=("user@test.dev",),
+        domains=("test.dev",),
+    )
+
+    with pytest.raises(EmailDeliveryError) as exc_info:
+        await deliver_otp(
+            recipient="user@test.dev",
+            code="222222",
+            purpose="registration",
+            timestamp=datetime.now(UTC),
+        )
+
+    assert exc_info.value.is_suppressed is True
+    assert exc_info.value.is_recipient_rejected is False
+    assert otp_delivery_sink.get_latest_otp("user@test.dev") is None
+
+
+@pytest.mark.asyncio
+async def test_deliver_otp_failure_does_not_log_otp_or_body(mocked_user_adapter, caplog):
+    """Sensitive OTP and message body must not appear in delivery logs."""
+    _, adapter = mocked_user_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "SMTP connection failed: TimeoutError",
+        recipient="developer@example.test",
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(EmailDeliveryError):
+        await deliver_otp(
+            recipient="developer@example.test",
+            code="987654",
+            purpose="registration",
+            timestamp=datetime.now(UTC),
+        )
+
+    assert "987654" not in caplog.text
+    assert "Your verification code is:" not in caplog.text
 
 
 # ==============================================================================
@@ -245,53 +241,57 @@ def test_smtp_connection_refused_error():
 
 
 @pytest.mark.asyncio
-async def test_registration_with_allowed_recipient_smtp_success():
-    """Verify registration succeeds when recipient is allowed and SMTP delivery passes."""
-    user_settings.dev_email_allowlist = "developer@example.test"
+async def test_registration_with_allowed_recipient_smtp_success(mocked_user_adapter):
+    """Verify registration succeeds when recipient is allowed and adapter delivery passes."""
+    _, adapter = mocked_user_adapter
 
-    with patch("src.services.user.otp_delivery._send_smtp_email_sync") as mock_send:
-        transport = ASGITransport(app=user_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/auth/register",
-                json={
-                    "username": "smtp_dev_user",
-                    "email": "developer@example.test",
-                    "password": "Password123!",
-                },
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/auth/register",
+            json={
+                "username": "smtp_dev_user",
+                "email": "developer@example.test",
+                "password": "Password123!",
+            },
+        )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending_verification"
+        assert adapter.send.await_count == 1
+
+        # Verify challenge is in 'pending' status in database
+        async with user_db_module.user_db.session() as db_session:
+            query = select(PendingRegistration).where(
+                PendingRegistration.email_normalized == "developer@example.test"
             )
-            assert resp.status_code == 202
-            assert resp.json()["status"] == "pending_verification"
-            assert mock_send.call_count == 1
+            pending = (await db_session.execute(query)).scalar_one_or_none()
+            assert pending is not None
+            assert pending.status == "pending"
 
-            # Verify challenge is in 'pending' status in database
-            async with user_db_module.user_db.session() as db_session:
-                query = select(PendingRegistration).where(
-                    PendingRegistration.email_normalized == "developer@example.test"
-                )
-                pending = (await db_session.execute(query)).scalar_one_or_none()
-                assert pending is not None
-                assert pending.status == "pending"
-
-            # Verify account can now be verified
-            otp = otp_delivery_sink.get_latest_otp("developer@example.test")
-            assert otp is not None
-            v_res = await client.post(
-                "/auth/register/verify",
-                json={"email": "developer@example.test", "otp": otp},
-            )
-            assert v_res.status_code == 201
+        # Verify account can now be verified
+        otp = otp_delivery_sink.get_latest_otp("developer@example.test")
+        assert otp is not None
+        v_res = await client.post(
+            "/auth/register/verify",
+            json={"email": "developer@example.test", "otp": otp},
+        )
+        assert v_res.status_code == 201
 
 
 @pytest.mark.asyncio
-async def test_registration_delivery_failure_safe_handling():
-    """Verify registration with rejected recipient returns neutral 202 and prevents verification.
+async def test_registration_delivery_failure_safe_handling(mocked_user_adapter):
+    """Verify an adapter failure returns neutral 202 and prevents verification.
 
     Key safety requirement:
     - Return neutral 202 Accepted (anti-enumeration DEC-001).
     - Transition challenge to 'delivery_failed' so the un-emailed OTP cannot activate the account.
     """
-    user_settings.dev_email_allowlist = "developer@example.test"
+    _, adapter = mocked_user_adapter
+    adapter.send.side_effect = EmailAdapterError(
+        "SMTP connection failed: TimeoutError",
+        recipient="unlisted@example.com",
+        is_recipient_rejected=False,
+    )
 
     transport = ASGITransport(app=user_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -327,47 +327,47 @@ async def test_registration_delivery_failure_safe_handling():
 
 
 @pytest.mark.asyncio
-async def test_resend_otp_delivery_failure_safe_handling():
+async def test_resend_otp_delivery_failure_safe_handling(mocked_user_adapter):
     """Verify resend OTP endpoint safe failure handling when delivery fails."""
-    user_settings.dev_email_allowlist = "tester@example.test"
+    _, adapter = mocked_user_adapter
 
     # Step 1: Initial successful registration
-    with patch("src.services.user.otp_delivery._send_smtp_email_sync"):
-        transport = ASGITransport(app=user_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            reg_resp = await client.post(
-                "/auth/register",
-                json={
-                    "username": "resend_tester",
-                    "email": "tester@example.test",
-                    "password": "Password123!",
-                },
+    transport = ASGITransport(app=user_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        reg_resp = await client.post(
+            "/auth/register",
+            json={
+                "username": "resend_tester",
+                "email": "tester@example.test",
+                "password": "Password123!",
+            },
+        )
+        assert reg_resp.status_code == 202
+        assert adapter.send.await_count == 1
+
+        # Advance resend cooldown in database
+        async with user_db_module.user_db.session() as db_session:
+            query = select(PendingRegistration).where(
+                PendingRegistration.email_normalized == "tester@example.test"
             )
-            assert reg_resp.status_code == 202
+            pending = (await db_session.execute(query)).scalar_one()
+            pending.resend_available_at = datetime.now(UTC)
+            await db_session.commit()
 
-            # Advance resend cooldown in database
-            async with user_db_module.user_db.session() as db_session:
-                query = select(PendingRegistration).where(
-                    PendingRegistration.email_normalized == "tester@example.test"
-                )
-                pending = (await db_session.execute(query)).scalar_one()
-                pending.resend_available_at = datetime.now(UTC)
-                await db_session.commit()
+        # Step 2: Now simulate SMTP server failure during resend
+        adapter.send.side_effect = EmailAdapterError(
+            "SMTP connection failed: TimeoutError",
+            recipient="tester@example.test",
+            is_recipient_rejected=False,
+        )
+        resend_resp = await client.post(
+            "/auth/register/resend-otp",
+            json={"email": "tester@example.test"},
+        )
+        assert resend_resp.status_code == 202
+        assert adapter.send.await_count == 2
 
-            # Step 2: Now simulate SMTP server failure during resend
-            with patch(
-                "src.services.user.otp_delivery._send_smtp_email_sync",
-                side_effect=EmailDeliveryError(
-                    "SMTP Server Unavailable", recipient="tester@example.test"
-                ),
-            ):
-                resend_resp = await client.post(
-                    "/auth/register/resend-otp",
-                    json={"email": "tester@example.test"},
-                )
-                assert resend_resp.status_code == 202
-
-                # Verify pending record was marked as delivery_failed
-                async with user_db_module.user_db.session() as db_session:
-                    pending_after = (await db_session.execute(query)).scalar_one()
-                    assert pending_after.status == "delivery_failed"
+        # Verify pending record was marked as delivery_failed
+        async with user_db_module.user_db.session() as db_session:
+            pending_after = (await db_session.execute(query)).scalar_one()
+            assert pending_after.status == "delivery_failed"

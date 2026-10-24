@@ -1,0 +1,29 @@
+services:
+  test-postgres:
+    image: postgres:16-alpine
+    container_name: forum_test_postgres_t031_2_15
+    restart: "no"
+    environment:
+      POSTGRES_USER: test_admin
+      POSTGRES_PASSWORD: test_secure_password_9988!
+      POSTGRES_DB: test_default
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - test_postgres_data_t031_2_15:/var/lib/postgresql/data
+    networks:
+      - test_network_t031_2_15
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_admin -d test_default"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+networks:
+  test_network_t031_2_15:
+    name: test_network_t031_2_15
+    driver: bridge
+
+volumes:
+  test_postgres_data_t031_2_15:
+    name: test_postgres_data_t031_2_15

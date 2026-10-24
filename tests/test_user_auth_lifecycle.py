@@ -97,12 +97,9 @@ def configure_test_email_environment():
     user_app_mod.rate_limiter_resend_otp.reset()
     otp_delivery_sink.clear()
     orig_backend = user_settings.email_delivery_backend
-    orig_allowlist = user_settings.dev_email_allowlist
     user_settings.email_delivery_backend = "memory"
-    user_settings.dev_email_allowlist = "bob@example.com,alice@example.com,charlie@example.com,david@example.com,emma@example.com,frank@example.com,grace@example.com,hannah@example.com,ian@example.com,kyle@example.com,developer@example.test,tester@example.test"
     yield
     user_settings.email_delivery_backend = orig_backend
-    user_settings.dev_email_allowlist = orig_allowlist
     otp_delivery_sink.clear()
     user_app_mod.rate_limiter_register.reset()
     user_app_mod.rate_limiter_login.reset()
@@ -1014,7 +1011,6 @@ async def test_recovery_request_normalizes_duplicate_unconsumed_tokens():
     suffix = uuid.uuid4().hex[:8]
     email = f"recovery_dup_request_{suffix}@example.test"
     username = f"recovery_dup_request_{suffix}"
-    user_settings.dev_email_allowlist = f"{user_settings.dev_email_allowlist},{email}"
     account_id = await _seed_recovery_account(email, username)
 
     now = datetime.now(UTC)
@@ -1222,11 +1218,6 @@ async def test_change_email_request_requires_password():
     email = f"email_contract_{suffix}@example.test"
     new_email = f"email_contract_new_{suffix}@example.test"
     password = "InitialPassword123!"
-
-    # The delivery allowlist is restored by the autouse fixture after this test.
-    user_settings.dev_email_allowlist = (
-        f"{user_settings.dev_email_allowlist},{email},{new_email}"
-    )
 
     transport = ASGITransport(app=user_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
